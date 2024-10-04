@@ -269,23 +269,25 @@ def display_login_register():
         new_password = st.text_input("Password", type="password", key="register_password")
         full_name = st.text_input("Full Name", key="register_full_name")
         email = st.text_input("Email", key="register_email")
-        user_group = st.selectbox("User Group", ["GPD", "RZM"], key="register_user_group")
+        user_group = st.selectbox("User Group", ["Select...", "GPD", "RZM"], key="register_user_group")
         
         sub_group = None
         region = None
         zone = None
         
         if user_group == "GPD":
-            sub_group = st.selectbox("Sub Group", ["Finance", "IT", "Reporting/Admin", "Admin Manager"], key="register_sub_group")
+            sub_group = st.selectbox("Sub Group", ["Select...", "Finance", "IT", "Reporting/Admin", "Admin Manager"], key="register_sub_group")
             if sub_group == "Admin Manager":
-                region = st.selectbox("Region", [f"Region {i}" for i in range(1, 7)], key="register_region_gpd")
+                region = st.selectbox("Region", ["Select..."] + [f"Region {i}" for i in range(1, 7)], key="register_region_gpd")
         elif user_group == "RZM":
-            region = st.selectbox("Region", list(zones_data.keys()), key="register_region_rzm")
-            if region:
-                zone = st.selectbox("Zone", zones_data[region], key="register_zone")
+            region = st.selectbox("Region", ["Select..."] + list(zones_data.keys()), key="register_region_rzm")
+            if region and region != "Select...":
+                zone = st.selectbox("Zone", ["Select..."] + zones_data[region], key="register_zone")
         
         if st.button("Register"):
-            if register_user(new_username, new_password, full_name, email, user_group, sub_group, region, zone):
+            if user_group == "Select..." or (user_group == "GPD" and sub_group == "Select...") or (user_group == "RZM" and (region == "Select..." or zone == "Select...")):
+                st.error("Please select all required fields.")
+            elif register_user(new_username, new_password, full_name, email, user_group, sub_group, region, zone):
                 st.success("Registration successful! Please login.")
             else:
                 st.error("Username already exists")
