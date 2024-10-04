@@ -4,7 +4,7 @@ import hashlib
 import os
 import json
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
@@ -13,6 +13,9 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.filters import FilterColumn, Filters
 from openpyxl.utils import get_column_letter
 from calendar import month_name
+import time
+import struct
+import re
 
 # Initialize session state
 if 'logged_in' not in st.session_state:
@@ -36,7 +39,7 @@ def init_db():
     conn = sqlite3.connect('reports.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS reports
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 (id TEXT PRIMARY KEY,
                   username TEXT,
                   zone TEXT,
                   year INTEGER,
@@ -117,24 +120,23 @@ def save_report(username, zone, year, month, report_data):
     conn = sqlite3.connect('reports.db')
     c = conn.cursor()
     report_json = json.dumps(report_data)
-    report_id = f"{year}{month:02d}"  # Create ID as YYYYMM
+    report_id = f"{year}-{month:02d}"  # Create ID as YYYY-MM
     
-    # Check if a report with this ID already exists
-    c.execute("SELECT * FROM reports WHERE id=?", (report_id,))
+    # Check if a report with this ID already exists for this user
+    c.execute("SELECT * FROM reports WHERE id=? AND username=?", (report_id, username))
     existing_report = c.fetchone()
     
     if existing_report:
-        # Update existing report
-        c.execute("""UPDATE reports SET username=?, zone=?, report_data=?, submission_date=?
-                     WHERE id=?""", (username, zone, report_json, datetime.now(), report_id))
+        conn.close()
+        return False, "A report for this month and year already exists. Please edit the existing report instead."
     else:
         # Insert new report
         c.execute("""INSERT INTO reports (id, username, zone, year, month, report_data, submission_date)
                      VALUES (?, ?, ?, ?, ?, ?, ?)""",
                   (report_id, username, zone, year, month, report_json, datetime.now()))
-    
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
+        return True, "Report submitted successfully!"
 
 # New function to get user details
 def get_user_details(username):
@@ -185,6 +187,50 @@ def calculate_report_metrics(reports):
             else:
                 metrics_sum[key] = int(value)
     return total_reports, metrics_sum
+
+# Add these new functions
+def request_edit_permission(username, report_id, reason):
+    conn = sqlite3.connect('edit_requests.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS edit_requests
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  username TEXT,
+                  report_id TEXT,
+                  reason TEXT,
+                  status TEXT,
+                  request_date DATETIME,
+                  expiry_date DATETIME)''')
+    c.execute("INSERT INTO edit_requests (username, report_id, reason, status, request_date) VALUES (?, ?, ?, ?, ?)",
+              (username, report_id, reason, "Pending", datetime.now()))
+    conn.commit()
+    conn.close()
+
+def get_edit_requests():
+    conn = sqlite3.connect('edit_requests.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM edit_requests WHERE status='Pending'")
+    requests = c.fetchall()
+    conn.close()
+    return requests
+
+def update_edit_request(request_id, status, expiry_date=None):
+    conn = sqlite3.connect('edit_requests.db')
+    c = conn.cursor()
+    if expiry_date:
+        c.execute("UPDATE edit_requests SET status=?, expiry_date=? WHERE id=?", (status, expiry_date, request_id))
+    else:
+        c.execute("UPDATE edit_requests SET status=? WHERE id=?", (status, request_id))
+    conn.commit()
+    conn.close()
+
+def check_edit_permission(username, report_id):
+    conn = sqlite3.connect('edit_requests.db')
+    c = conn.cursor()
+    c.execute("SELECT * FROM edit_requests WHERE username=? AND report_id=? AND status='Approved' AND expiry_date > ?",
+              (username, report_id, datetime.now()))
+    permission = c.fetchone()
+    conn.close()
+    return permission is not None
 
 # Main app
 def main():
@@ -255,7 +301,7 @@ def display_admin_dashboard():
     st.subheader("Super Admin Dashboard")
 
     # Create tabs for different admin functions
-    tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "User Management", "View Reports", "Manage Reports"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Dashboard", "User Management", "View Reports", "Manage Reports", "Edit Requests"])
 
     with tab1:
         st.subheader("Admin Dashboard")
@@ -347,79 +393,11 @@ def display_admin_dashboard():
         if reports:
             report_df = pd.DataFrame(reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
             
-            # Search feature
-            search_term = st.text_input("Search reports", "")
-            
-            # Filter reports based on search term
-            if search_term:
-                report_df = report_df[
-                    report_df.apply(lambda row: search_term.lower() in ' '.join(row.astype(str)).lower(), axis=1)
-                ]
-
-            # Filter reports
-            st.subheader("Filter Reports")
-            
-            # Username dropdown
-            usernames = ['All'] + sorted(report_df['Username'].unique().tolist())
-            filter_username = st.selectbox("Filter by Username", usernames)
-            
-            # Zone dropdown
-            zones = ['All'] + sorted(report_df['Zone'].unique().tolist())
-            filter_zone = st.selectbox("Filter by Zone", zones)
-            
-            time_period_options = get_time_period_options()
-            filter_type = st.selectbox("Filter by Time Period", ['All'] + list(time_period_options.keys()))
-            
-            if filter_type != 'All':
-                filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type])
-
-            # Apply filters
-            if filter_username != 'All':
-                report_df = report_df[report_df['Username'] == filter_username]
-            if filter_zone != 'All':
-                report_df = report_df[report_df['Zone'] == filter_zone]
-
-            if filter_type != 'All':
-                if filter_type == 'Annual':
-                    report_df = report_df[report_df['Year'] == int(filter_value)]
-                elif filter_type == 'Quarterly':
-                    year, quarter = filter_value.split()
-                    quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
-                    report_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'].isin(quarter_month_map[quarter]))
-                    ]
-                elif filter_type == 'Half-Year':
-                    year, half = filter_value.split()
-                    half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
-                    report_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'].isin(half_year_month_map[half]))
-                    ]
-                elif filter_type == 'Monthly':
-                    year, month = filter_value.split()
-                    month_num = datetime.strptime(month, '%B').month
-                    report_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'] == month_num)
-                    ]
-
-            st.subheader("Filtered Reports")
-            st.dataframe(report_df[["ID", "Username", "Zone", "Year", "Month", "Submission Date"]])
-
-            # Add download button
-            if not report_df.empty:
-                excel_data = download_excel(report_df, "reports.xlsx")
-                st.download_button(
-                    label="Download Reports as Excel",
-                    data=excel_data,
-                    file_name="reports.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-
             # View detailed report
             view_report_details(report_df)
 
+            # Remove the individual download button
+            # Keep only the "Download All Reports as Excel" button, which is inside the view_report_details function
         else:
             st.write("No reports submitted yet.")
 
@@ -439,13 +417,31 @@ def display_admin_dashboard():
             with st.form("edit_report_form"):
                 new_username = st.text_input("Username", value=report_to_edit['Username'])
                 new_zone = st.text_input("Zone", value=report_to_edit['Zone'])
-                new_year = st.number_input("Year", min_value=2020, max_value=datetime.now().year, value=int(report_to_edit['Year']))
-                new_month = st.selectbox("Month", range(1, 13), index=int(report_to_edit['Month'])-1, format_func=lambda x: datetime(2000, x, 1).strftime('%B'))
+                
+                # Handle potentially binary data for Year and Month
+                try:
+                    year_value = struct.unpack('q', report_to_edit['Year'])[0] if isinstance(report_to_edit['Year'], bytes) else int(report_to_edit['Year'])
+                except (struct.error, ValueError):
+                    year_value = datetime.now().year  # Default to current year if conversion fails
+                
+                try:
+                    month_value = struct.unpack('q', report_to_edit['Month'])[0] if isinstance(report_to_edit['Month'], bytes) else int(report_to_edit['Month'])
+                except (struct.error, ValueError):
+                    month_value = 1  # Default to January if conversion fails
+                
+                new_year = st.number_input("Year", min_value=2020, max_value=datetime.now().year, value=year_value)
+                new_month = st.selectbox("Month", range(1, 13), index=month_value-1, format_func=lambda x: datetime(2000, x, 1).strftime('%B'))
                 
                 report_data = json.loads(report_to_edit['Report Data'])
                 new_report_data = {}
                 for key, value in report_data.items():
-                    new_report_data[key] = st.number_input(key, value=int(value))
+                    try:
+                        if isinstance(value, bytes):
+                            value = struct.unpack('q', value)[0]
+                        new_report_data[key] = st.number_input(key, value=int(value))
+                    except (ValueError, struct.error):
+                        st.error(f"Invalid value for {key}: {value}")
+                        new_report_data[key] = st.number_input(key, value=0)
 
                 if st.form_submit_button("Update Report"):
                     update_report(report_id_to_edit, new_username, new_zone, new_year, new_month, new_report_data)
@@ -461,6 +457,30 @@ def display_admin_dashboard():
                 st.rerun()
         else:
             st.write("No reports submitted yet.")
+
+    with tab5:
+        st.subheader("Manage Edit Requests")
+        edit_requests = get_edit_requests()
+        if edit_requests:
+            for request in edit_requests:
+                st.write(f"User: {request[1]}, Report ID: {request[2]}, Reason: {request[3]}")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    if st.button(f"Approve {request[0]}"):
+                        expiry_days = st.number_input("Edit access duration (days)", min_value=1, max_value=30, value=7)
+                        expiry_date = datetime.now() + timedelta(days=expiry_days)
+                        update_edit_request(request[0], "Approved", expiry_date)
+                        st.success(f"Edit request {request[0]} approved for {expiry_days} days.")
+                        time.sleep(1)  # Give the user a moment to see the success message
+                        st.rerun()  # Reload the page
+                with col2:
+                    if st.button(f"Reject {request[0]}"):
+                        update_edit_request(request[0], "Rejected")
+                        st.success(f"Edit request {request[0]} rejected.")
+                        time.sleep(1)  # Give the user a moment to see the success message
+                        st.rerun()  # Reload the page
+        else:
+            st.write("No pending edit requests.")
 
 # Add these new functions to handle report updates and deletions
 def update_report(report_id, username, zone, year, month, report_data):
@@ -489,123 +509,57 @@ def display_user_dashboard():
     # Create tabs for different sections
     if user_group == "GPD" and sub_group == "Reporting/Admin":
         tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "View All RZM Reports", "View Your Submitted Reports", "Submit New Report"])
-    else:
-        tab1, tab2, tab3 = st.tabs(["Dashboard", "View Your Submitted Reports", "Submit New Report"])
-
-    with tab1:
-        st.subheader("Your Dashboard")
+    elif user_group == "RZM":
+        # Fetch user reports once and create report_df
         user_reports = fetch_reports(st.session_state.username)
-        total_reports, metrics_sum = calculate_report_metrics(user_reports)
-        st.write(f"Total Reports Submitted: {total_reports}")
+        if user_reports:
+            report_df = pd.DataFrame(user_reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
+        else:
+            report_df = pd.DataFrame()
 
-        # Add filters
-        st.subheader("Filter Dashboard")
-        time_period_options = get_time_period_options()
-        filter_type = st.selectbox("Filter by Time Period", ['All Time', 'Annual', 'Quarterly', 'Half-Year', 'Monthly'], key="dashboard_filter_type")
-        
-        if filter_type != 'All Time':
-            filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type], key="dashboard_filter_value")
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Dashboard", "View Your Submitted Reports", "Submit New Report", "Edit Reports", "Edit Requests"])
 
-            # Apply filters
-            filtered_reports = user_reports
-            if filter_type == 'Annual':
-                filtered_reports = [r for r in user_reports if r[3] == int(filter_value)]
-            elif filter_type == 'Quarterly':
-                year, quarter = filter_value.split()
-                quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
-                filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in quarter_month_map[quarter]]
-            elif filter_type == 'Half-Year':
-                year, half = filter_value.split()
-                half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
-                filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in half_year_month_map[half]]
-            elif filter_type == 'Monthly':
-                year, month = filter_value.split()
-                month_num = datetime.strptime(month, '%B').month
-                filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] == month_num]
+        with tab1:
+            st.subheader("Your Dashboard")
+            user_reports = fetch_reports(st.session_state.username)
+            total_reports, metrics_sum = calculate_report_metrics(user_reports)
+            st.write(f"Total Reports Submitted: {total_reports}")
 
-            total_reports, metrics_sum = calculate_report_metrics(filtered_reports)
-            st.write(f"Filtered Reports: {total_reports}")
-
-        st.write("Metrics Summary:")
-        metrics_df = pd.DataFrame(list(metrics_sum.items()), columns=['Metric', 'Total'])
-        st.table(metrics_df)
-
-    if user_group == "GPD" and sub_group == "Reporting/Admin":
-        with tab2:
-            st.subheader("View All RZM Reports")
-            all_rzm_reports = fetch_reports()  # Fetch all reports
-            if all_rzm_reports:
-                report_df = pd.DataFrame(all_rzm_reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
-                
-                # Filter options
-                st.subheader("Filter Reports")
-                usernames = ['All'] + sorted(report_df['Username'].unique().tolist())
-                filter_username = st.selectbox("Filter by Username", usernames)
-                
-                zones = ['All'] + sorted(report_df['Zone'].unique().tolist())
-                filter_zone = st.selectbox("Filter by Zone", zones)
-                
-                time_period_options = get_time_period_options()
-                filter_type = st.selectbox("Filter by Time Period", ['All'] + list(time_period_options.keys()))
-                
-                if filter_type != 'All':
-                    filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type])
+            # Add filters
+            st.subheader("Filter Dashboard")
+            time_period_options = get_time_period_options()
+            filter_type = st.selectbox("Filter by Time Period", ['All Time', 'Annual', 'Quarterly', 'Half-Year', 'Monthly'], key="dashboard_filter_type")
+            
+            if filter_type != 'All Time':
+                filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type], key="dashboard_filter_value")
 
                 # Apply filters
-                if filter_username != 'All':
-                    report_df = report_df[report_df['Username'] == filter_username]
-                if filter_zone != 'All':
-                    report_df = report_df[report_df['Zone'] == filter_zone]
+                filtered_reports = user_reports
+                if filter_type == 'Annual':
+                    filtered_reports = [r for r in user_reports if r[3] == int(filter_value)]
+                elif filter_type == 'Quarterly':
+                    year, quarter = filter_value.split()
+                    quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
+                    filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in quarter_month_map[quarter]]
+                elif filter_type == 'Half-Year':
+                    year, half = filter_value.split()
+                    half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
+                    filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in half_year_month_map[half]]
+                elif filter_type == 'Monthly':
+                    year, month = filter_value.split()
+                    month_num = datetime.strptime(month, '%B').month
+                    filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] == month_num]
 
-                if filter_type != 'All':
-                    if filter_type == 'Annual':
-                        report_df = report_df[report_df['Year'] == int(filter_value)]
-                    elif filter_type == 'Quarterly':
-                        year, quarter = filter_value.split()
-                        quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
-                        report_df = report_df[
-                            (report_df['Year'] == int(year)) & 
-                            (report_df['Month'].isin(quarter_month_map[quarter]))
-                        ]
-                    elif filter_type == 'Half-Year':
-                        year, half = filter_value.split()
-                        half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
-                        report_df = report_df[
-                            (report_df['Year'] == int(year)) & 
-                            (report_df['Month'].isin(half_year_month_map[half]))
-                        ]
-                    elif filter_type == 'Monthly':
-                        year, month = filter_value.split()
-                        month_num = datetime.strptime(month, '%B').month
-                        report_df = report_df[
-                            (report_df['Year'] == int(year)) & 
-                            (report_df['Month'] == month_num)
-                        ]
+                total_reports, metrics_sum = calculate_report_metrics(filtered_reports)
+                st.write(f"Filtered Reports: {total_reports}")
 
-                st.subheader("Filtered Reports")
-                st.dataframe(report_df[["ID", "Username", "Zone", "Year", "Month", "Submission Date"]])
+            st.write("Metrics Summary:")
+            metrics_df = pd.DataFrame(list(metrics_sum.items()), columns=['Metric', 'Total'])
+            st.table(metrics_df)
 
-                # Add download button
-                if not report_df.empty:
-                    excel_data = download_excel(report_df, "rzm_reports.xlsx")
-                    st.download_button(
-                        label="Download RZM Reports as Excel",
-                        data=excel_data,
-                        file_name="rzm_reports.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-
-                # View detailed report
-                view_report_details(report_df)
-
-            else:
-                st.write("No reports submitted yet.")
-
-        with tab3:
+        with tab2:
             st.subheader("View Your Submitted Reports")
-            user_reports = fetch_reports(st.session_state.username)
-            if user_reports:
-                report_df = pd.DataFrame(user_reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
+            if not report_df.empty:
                 st.dataframe(report_df[["ID", "Zone", "Year", "Month", "Submission Date"]])
 
                 # Filter reports
@@ -644,40 +598,69 @@ def display_user_dashboard():
 
                 # View detailed report
                 view_report_details(filtered_df)
-
             else:
                 st.write("You haven't submitted any reports yet.")
+
+        with tab3:
+            st.subheader("Submit New Report")
+            if user_group == "GPD":
+                st.write("Reporting functionality for GPD users is coming soon!")
+            elif user_group == "RZM":
+                st.write(f"RZM: {st.session_state.username}")
+                st.write(f"Zone: {zone}")
+
+                year = st.selectbox("Year", range(datetime.now().year, 2020, -1))
+                month = st.selectbox("Month", range(1, 13), format_func=lambda x: datetime(2000, x, 1).strftime('%B'))
+
+                report_fields = [
+                    "Wonder Alerts", "SYTK Alerts", "RRM", "Total Distribution", "No of Souls Won",
+                    "No of Rhapsody Outreaches", "No of Rhapsody Cells", "No of New Churches",
+                    "No of New Partners Enlisted", "No of Lingual Cells", "No of Language Churches",
+                    "No of Languages Sponsored", "No of Distribution Centers", "No of Groups Who Have Selected 1M",
+                    "No of Groups Achieved 1M Copies", "No of Groups Achieved 500k Copies",
+                    "No of Groups Achieved 250k Copies", "No of Groups Achieved 100k Copies",
+                    "Prayer Programs", "Partner Programs", "No of External Ministers",
+                    "ISEED Daily Partners", "Language Ambassadors"
+                ]
+
+                report_data = {}
+                for field in report_fields:
+                    report_data[field] = st.number_input(field, min_value=0, value=0)
+
+                if st.button("Submit Report"):
+                    success, message = save_report(st.session_state.username, zone, year, month, report_data)
+                    if success:
+                        st.success(message)
+                        time.sleep(1)  # Give the user a moment to see the success message
+                        st.rerun()  # Reload the page
+                    else:
+                        st.error(message)
 
         with tab4:
-            st.subheader("Submit New Report")
-            if user_group == "GPD":
-                st.write("Reporting functionality for GPD users is coming soon!")
-            elif user_group == "RZM":
-                st.write(f"RZM: {st.session_state.username}")
-                st.write(f"Zone: {zone}")
+            st.subheader("Edit Reports")
+            if not report_df.empty:
+                report_to_edit = st.selectbox("Select a report to edit", report_df['ID'])
+                
+                if check_edit_permission(st.session_state.username, report_to_edit):
+                    # Allow editing
+                    edit_report(report_to_edit, report_df)
+                else:
+                    st.warning("You don't have permission to edit this report. Please request edit access.")
+            else:
+                st.write("You haven't submitted any reports yet.")
 
-                year = st.selectbox("Year", range(datetime.now().year, 2020, -1))
-                month = st.selectbox("Month", range(1, 13), format_func=lambda x: datetime(2000, x, 1).strftime('%B'))
-
-                report_fields = [
-                    "Wonder Alerts", "SYTK Alerts", "RRM", "Total Distribution", "No of Souls Won",
-                    "No of Rhapsody Outreaches", "No of Rhapsody Cells", "No of New Churches",
-                    "No of New Partners Enlisted", "No of Lingual Cells", "No of Language Churches",
-                    "No of Languages Sponsored", "No of Distribution Centers", "No of Groups Who Have Selected 1M",
-                    "No of Groups Achieved 1M Copies", "No of Groups Achieved 500k Copies",
-                    "No of Groups Achieved 250k Copies", "No of Groups Achieved 100k Copies",
-                    "Prayer Programs", "Partner Programs", "No of External Ministers",
-                    "ISEED Daily Partners", "Language Ambassadors"
-                ]
-
-                report_data = {}
-                for field in report_fields:
-                    report_data[field] = st.number_input(field, min_value=0, value=0)
-
-                if st.button("Submit Report"):
-                    save_report(st.session_state.username, zone, year, month, report_data)
-                    st.success("Report submitted successfully!")
-                    st.rerun()
+        with tab5:
+            st.subheader("Edit Requests")
+            if not report_df.empty:
+                report_to_request = st.selectbox("Select a report to request edit access", report_df['ID'])
+                reason = st.text_area("Reason for edit request")
+                if st.button("Submit Edit Request"):
+                    request_edit_permission(st.session_state.username, report_to_request, reason)
+                    st.success("Edit request submitted successfully!")
+                    time.sleep(1)  # Give the user a moment to see the success message
+                    st.rerun()  # Reload the page
+            else:
+                st.write("You haven't submitted any reports yet. You can't request edits for non-existent reports.")
 
     else:
         with tab2:
@@ -754,9 +737,21 @@ def display_user_dashboard():
                     report_data[field] = st.number_input(field, min_value=0, value=0)
 
                 if st.button("Submit Report"):
-                    save_report(st.session_state.username, zone, year, month, report_data)
-                    st.success("Report submitted successfully!")
-                    st.rerun()
+                    success, message = save_report(st.session_state.username, zone, year, month, report_data)
+                    if success:
+                        st.success(message)
+                        time.sleep(1)  # Give the user a moment to see the success message
+                        st.rerun()  # Reload the page
+                    else:
+                        st.error(message)
+
+def clean_value_for_excel(value):
+    if isinstance(value, str):
+        # Remove or replace illegal characters
+        value = re.sub(r'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]', '', value)
+        # Replace other potentially problematic characters
+        value = value.replace('\x0D', '\n')  # Replace carriage return with newline
+    return value
 
 def download_excel(df, filename):
     output = io.BytesIO()
@@ -772,14 +767,27 @@ def download_excel(df, filename):
     # Add data headers
     headers = df.columns.tolist()
     for col, header in enumerate(headers, start=1):
-        cell = sheet.cell(row=3, column=col, value=header)
+        cell = sheet.cell(row=3, column=col, value=clean_value_for_excel(header))
         cell.font = Font(bold=True)
         cell.fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
 
     # Add data
     for row, data in df.iterrows():
         for col, value in enumerate(data, start=1):
-            sheet.cell(row=row+4, column=col, value=value)
+            try:
+                if isinstance(value, bytes):
+                    try:
+                        value = value.decode('utf-8')
+                    except UnicodeDecodeError:
+                        value = value.decode('utf-8', errors='replace')
+                elif isinstance(value, (int, float)):
+                    sheet.cell(row=row+4, column=col, value=value)
+                    continue
+                
+                cleaned_value = clean_value_for_excel(str(value))
+                sheet.cell(row=row+4, column=col, value=cleaned_value)
+            except Exception as e:
+                print(f"Error with value: {value}, type: {type(value)}, error: {str(e)}")
 
     # Adjust column widths
     for col in range(1, sheet.max_column + 1):
@@ -896,6 +904,14 @@ def view_report_details(report_df):
                 report = filtered_df[filtered_df['ID'] == selected_report_id].iloc[0]
                 report_data = json.loads(report['Report Data'])
                 
+                # Ensure all values in report_data are properly decoded
+                for key, value in report_data.items():
+                    if isinstance(value, bytes):
+                        try:
+                            report_data[key] = struct.unpack('q', value)[0]
+                        except struct.error:
+                            report_data[key] = value.decode('utf-8', errors='replace')
+                
                 st.write("GPD Admin Portal - Report Data")
                 st.write("---")
                 
@@ -908,8 +924,13 @@ def view_report_details(report_df):
                 with col2:
                     st.write(report['Username'])
                     st.write(report['Zone'])
-                    st.write(report['Year'])
-                    st.write(month_name[report['Month']])
+                    try:
+                        year = struct.unpack('q', report['Year'])[0] if isinstance(report['Year'], bytes) else int(report['Year'])
+                        month = struct.unpack('q', report['Month'])[0] if isinstance(report['Month'], bytes) else int(report['Month'])
+                        st.write(year)
+                        st.write(month_name[month])
+                    except (struct.error, ValueError):
+                        st.write("Invalid Year/Month")
                 
                 st.write("---")
                 st.write("Report Data:")
@@ -919,6 +940,45 @@ def view_report_details(report_df):
                 st.table(report_data_df)
     else:
         st.write("No reports available for the selected filters.")
+
+# Add this new function to handle report editing
+def edit_report(report_id, report_df):
+    report = report_df[report_df['ID'] == report_id].iloc[0]
+    report_data = json.loads(report['Report Data'])
+    
+    # Add debugging information
+    st.write("Debug: Report data")
+    st.write(report)
+    
+    # Extract year and month from the report ID or use the values from the report
+    try:
+        year, month = map(int, report_id.split('-'))
+    except ValueError:
+        # Handle binary data for year and month
+        try:
+            year = struct.unpack('q', report['Year'])[0] if isinstance(report['Year'], bytes) else int(report['Year'])
+            month = struct.unpack('q', report['Month'])[0] if isinstance(report['Month'], bytes) else int(report['Month'])
+        except (struct.error, ValueError):
+            st.error(f"Invalid year or month value: Year={report['Year']}, Month={report['Month']}")
+            return
+    
+    st.write(f"Editing report for {report['Zone']} - {month_name[month]} {year}")
+    
+    new_report_data = {}
+    for field, value in report_data.items():
+        try:
+            if isinstance(value, bytes):
+                value = struct.unpack('q', value)[0]
+            new_report_data[field] = st.number_input(field, value=int(value), key=f"edit_{field}")
+        except (ValueError, struct.error):
+            st.error(f"Invalid value for {field}: {value}")
+            new_report_data[field] = st.number_input(field, value=0, key=f"edit_{field}")
+    
+    if st.button("Save Changes"):
+        update_report(report_id, report['Username'], report['Zone'], year, month, new_report_data)
+        st.success("Report updated successfully!")
+        time.sleep(1)  # Give the user a moment to see the success message
+        st.rerun()  # Reload the page
 
 if __name__ == "__main__":
     init_db()
