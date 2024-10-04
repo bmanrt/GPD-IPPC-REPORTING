@@ -188,7 +188,7 @@ def main():
         display_login_register()
 
 def display_login_register():
-    st.title("GPD Admin Portal")
+    # Remove the duplicate title here
     tab1, tab2 = st.tabs(["Login", "Register"])
     
     with tab1:
@@ -242,7 +242,8 @@ def display_dashboard():
         st.rerun()
 
 def display_admin_dashboard():
-    st.write("Welcome to the GPD Admin Portal, Super Admin!")
+    # Remove "GPD Admin Portal" from here
+    st.write("Welcome, Super Admin!")
     st.subheader("Super Admin Dashboard")
 
     # Create tabs for different admin functions
@@ -475,7 +476,8 @@ def delete_report(report_id):
     conn.close()
 
 def display_user_dashboard():
-    st.write(f"Welcome to the GPD Admin Portal, {st.session_state.username}!")
+    # Remove "GPD Admin Portal" from here
+    st.write(f"Welcome, {st.session_state.username}!")
     st.subheader("User Dashboard")
 
     user_details = get_user_details(st.session_state.username)
