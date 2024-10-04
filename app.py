@@ -510,132 +510,135 @@ def display_user_dashboard():
     if user_group == "GPD" and sub_group == "Reporting/Admin":
         tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "View All RZM Reports", "View Your Submitted Reports", "Submit New Report"])
     elif user_group == "RZM":
-        # Fetch user reports once and create report_df
-        user_reports = fetch_reports(st.session_state.username)
-        if user_reports:
-            report_df = pd.DataFrame(user_reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
-        else:
-            report_df = pd.DataFrame()
-
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["Dashboard", "View Your Submitted Reports", "Submit New Report", "Edit Reports", "Edit Requests"])
+    else:
+        tab1, tab2, tab3 = st.tabs(["Dashboard", "View Your Submitted Reports", "Submit New Report"])
 
-        with tab1:
-            st.subheader("Your Dashboard")
-            user_reports = fetch_reports(st.session_state.username)
-            total_reports, metrics_sum = calculate_report_metrics(user_reports)
-            st.write(f"Total Reports Submitted: {total_reports}")
+    # Fetch user reports once and create report_df
+    user_reports = fetch_reports(st.session_state.username)
+    if user_reports:
+        report_df = pd.DataFrame(user_reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
+    else:
+        report_df = pd.DataFrame()
 
-            # Add filters
-            st.subheader("Filter Dashboard")
+    with tab1:
+        st.subheader("Your Dashboard")
+        user_reports = fetch_reports(st.session_state.username)
+        total_reports, metrics_sum = calculate_report_metrics(user_reports)
+        st.write(f"Total Reports Submitted: {total_reports}")
+
+        # Add filters
+        st.subheader("Filter Dashboard")
+        time_period_options = get_time_period_options()
+        filter_type = st.selectbox("Filter by Time Period", ['All Time', 'Annual', 'Quarterly', 'Half-Year', 'Monthly'], key="dashboard_filter_type")
+        
+        if filter_type != 'All Time':
+            filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type], key="dashboard_filter_value")
+
+            # Apply filters
+            filtered_reports = user_reports
+            if filter_type == 'Annual':
+                filtered_reports = [r for r in user_reports if r[3] == int(filter_value)]
+            elif filter_type == 'Quarterly':
+                year, quarter = filter_value.split()
+                quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
+                filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in quarter_month_map[quarter]]
+            elif filter_type == 'Half-Year':
+                year, half = filter_value.split()
+                half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
+                filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in half_year_month_map[half]]
+            elif filter_type == 'Monthly':
+                year, month = filter_value.split()
+                month_num = datetime.strptime(month, '%B').month
+                filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] == month_num]
+
+            total_reports, metrics_sum = calculate_report_metrics(filtered_reports)
+            st.write(f"Filtered Reports: {total_reports}")
+
+        st.write("Metrics Summary:")
+        metrics_df = pd.DataFrame(list(metrics_sum.items()), columns=['Metric', 'Total'])
+        st.table(metrics_df)
+
+    with tab2:
+        st.subheader("View Your Submitted Reports")
+        if not report_df.empty:
+            st.dataframe(report_df[["ID", "Zone", "Year", "Month", "Submission Date"]])
+
+            # Filter reports
+            st.subheader("Filter Your Reports")
             time_period_options = get_time_period_options()
-            filter_type = st.selectbox("Filter by Time Period", ['All Time', 'Annual', 'Quarterly', 'Half-Year', 'Monthly'], key="dashboard_filter_type")
-            
-            if filter_type != 'All Time':
-                filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type], key="dashboard_filter_value")
+            filter_type = st.selectbox("Filter by Time Period", ['Annual', 'Quarterly', 'Half-Year', 'Monthly'])
+            filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type])
 
-                # Apply filters
-                filtered_reports = user_reports
-                if filter_type == 'Annual':
-                    filtered_reports = [r for r in user_reports if r[3] == int(filter_value)]
-                elif filter_type == 'Quarterly':
-                    year, quarter = filter_value.split()
-                    quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
-                    filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in quarter_month_map[quarter]]
-                elif filter_type == 'Half-Year':
-                    year, half = filter_value.split()
-                    half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
-                    filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in half_year_month_map[half]]
-                elif filter_type == 'Monthly':
-                    year, month = filter_value.split()
-                    month_num = datetime.strptime(month, '%B').month
-                    filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] == month_num]
-
-                total_reports, metrics_sum = calculate_report_metrics(filtered_reports)
-                st.write(f"Filtered Reports: {total_reports}")
-
-            st.write("Metrics Summary:")
-            metrics_df = pd.DataFrame(list(metrics_sum.items()), columns=['Metric', 'Total'])
-            st.table(metrics_df)
-
-        with tab2:
-            st.subheader("View Your Submitted Reports")
-            if not report_df.empty:
-                st.dataframe(report_df[["ID", "Zone", "Year", "Month", "Submission Date"]])
-
-                # Filter reports
-                st.subheader("Filter Your Reports")
-                time_period_options = get_time_period_options()
-                filter_type = st.selectbox("Filter by Time Period", ['Annual', 'Quarterly', 'Half-Year', 'Monthly'])
-                filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type])
-
-                # Apply filters
-                if filter_type == 'Annual':
-                    filtered_df = report_df[report_df['Year'] == int(filter_value)]
-                elif filter_type == 'Quarterly':
-                    year, quarter = filter_value.split()
-                    quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
-                    filtered_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'].isin(quarter_month_map[quarter]))
-                    ]
-                elif filter_type == 'Half-Year':
-                    year, half = filter_value.split()
-                    half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
-                    filtered_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'].isin(half_year_month_map[half]))
-                    ]
-                elif filter_type == 'Monthly':
-                    year, month = filter_value.split()
-                    month_num = datetime.strptime(month, '%B').month
-                    filtered_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'] == month_num)
-                    ]
-
-                st.subheader("Filtered Reports")
-                st.dataframe(filtered_df[["ID", "Zone", "Year", "Month", "Submission Date"]])
-
-                # View detailed report
-                view_report_details(filtered_df)
-            else:
-                st.write("You haven't submitted any reports yet.")
-
-        with tab3:
-            st.subheader("Submit New Report")
-            if user_group == "GPD":
-                st.write("Reporting functionality for GPD users is coming soon!")
-            elif user_group == "RZM":
-                st.write(f"RZM: {st.session_state.username}")
-                st.write(f"Zone: {zone}")
-
-                year = st.selectbox("Year", range(datetime.now().year, 2020, -1))
-                month = st.selectbox("Month", range(1, 13), format_func=lambda x: datetime(2000, x, 1).strftime('%B'))
-
-                report_fields = [
-                    "Wonder Alerts", "SYTK Alerts", "RRM", "Total Distribution", "No of Souls Won",
-                    "No of Rhapsody Outreaches", "No of Rhapsody Cells", "No of New Churches",
-                    "No of New Partners Enlisted", "No of Lingual Cells", "No of Language Churches",
-                    "No of Languages Sponsored", "No of Distribution Centers", "No of Groups Who Have Selected 1M",
-                    "No of Groups Achieved 1M Copies", "No of Groups Achieved 500k Copies",
-                    "No of Groups Achieved 250k Copies", "No of Groups Achieved 100k Copies",
-                    "Prayer Programs", "Partner Programs", "No of External Ministers",
-                    "ISEED Daily Partners", "Language Ambassadors"
+            # Apply filters
+            if filter_type == 'Annual':
+                filtered_df = report_df[report_df['Year'] == int(filter_value)]
+            elif filter_type == 'Quarterly':
+                year, quarter = filter_value.split()
+                quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
+                filtered_df = report_df[
+                    (report_df['Year'] == int(year)) & 
+                    (report_df['Month'].isin(quarter_month_map[quarter]))
+                ]
+            elif filter_type == 'Half-Year':
+                year, half = filter_value.split()
+                half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
+                filtered_df = report_df[
+                    (report_df['Year'] == int(year)) & 
+                    (report_df['Month'].isin(half_year_month_map[half]))
+                ]
+            elif filter_type == 'Monthly':
+                year, month = filter_value.split()
+                month_num = datetime.strptime(month, '%B').month
+                filtered_df = report_df[
+                    (report_df['Year'] == int(year)) & 
+                    (report_df['Month'] == month_num)
                 ]
 
-                report_data = {}
-                for field in report_fields:
-                    report_data[field] = st.number_input(field, min_value=0, value=0)
+            st.subheader("Filtered Reports")
+            st.dataframe(filtered_df[["ID", "Zone", "Year", "Month", "Submission Date"]])
 
-                if st.button("Submit Report"):
-                    success, message = save_report(st.session_state.username, zone, year, month, report_data)
-                    if success:
-                        st.success(message)
-                        time.sleep(1)  # Give the user a moment to see the success message
-                        st.rerun()  # Reload the page
-                    else:
-                        st.error(message)
+            # View detailed report
+            view_report_details(filtered_df)
+        else:
+            st.write("You haven't submitted any reports yet.")
 
+    with tab3:
+        st.subheader("Submit New Report")
+        if user_group == "GPD":
+            st.write("Reporting functionality for GPD users is coming soon!")
+        elif user_group == "RZM":
+            st.write(f"RZM: {st.session_state.username}")
+            st.write(f"Zone: {zone}")
+
+            year = st.selectbox("Year", range(datetime.now().year, 2020, -1))
+            month = st.selectbox("Month", range(1, 13), format_func=lambda x: datetime(2000, x, 1).strftime('%B'))
+
+            report_fields = [
+                "Wonder Alerts", "SYTK Alerts", "RRM", "Total Distribution", "No of Souls Won",
+                "No of Rhapsody Outreaches", "No of Rhapsody Cells", "No of New Churches",
+                "No of New Partners Enlisted", "No of Lingual Cells", "No of Language Churches",
+                "No of Languages Sponsored", "No of Distribution Centers", "No of Groups Who Have Selected 1M",
+                "No of Groups Achieved 1M Copies", "No of Groups Achieved 500k Copies",
+                "No of Groups Achieved 250k Copies", "No of Groups Achieved 100k Copies",
+                "Prayer Programs", "Partner Programs", "No of External Ministers",
+                "ISEED Daily Partners", "Language Ambassadors"
+            ]
+
+            report_data = {}
+            for field in report_fields:
+                report_data[field] = st.number_input(field, min_value=0, value=0)
+
+            if st.button("Submit Report"):
+                success, message = save_report(st.session_state.username, zone, year, month, report_data)
+                if success:
+                    st.success(message)
+                    time.sleep(1)  # Give the user a moment to see the success message
+                    st.rerun()  # Reload the page
+                else:
+                    st.error(message)
+
+    if user_group == "RZM":
         with tab4:
             st.subheader("Edit Reports")
             if not report_df.empty:
@@ -661,89 +664,6 @@ def display_user_dashboard():
                     st.rerun()  # Reload the page
             else:
                 st.write("You haven't submitted any reports yet. You can't request edits for non-existent reports.")
-
-    else:
-        with tab2:
-            st.subheader("View Your Submitted Reports")
-            user_reports = fetch_reports(st.session_state.username)
-            if user_reports:
-                report_df = pd.DataFrame(user_reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
-                st.dataframe(report_df[["ID", "Zone", "Year", "Month", "Submission Date"]])
-
-                # Filter reports
-                st.subheader("Filter Your Reports")
-                time_period_options = get_time_period_options()
-                filter_type = st.selectbox("Filter by Time Period", ['Annual', 'Quarterly', 'Half-Year', 'Monthly'])
-                filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type])
-
-                # Apply filters
-                if filter_type == 'Annual':
-                    filtered_df = report_df[report_df['Year'] == int(filter_value)]
-                elif filter_type == 'Quarterly':
-                    year, quarter = filter_value.split()
-                    quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
-                    filtered_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'].isin(quarter_month_map[quarter]))
-                    ]
-                elif filter_type == 'Half-Year':
-                    year, half = filter_value.split()
-                    half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
-                    filtered_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'].isin(half_year_month_map[half]))
-                    ]
-                elif filter_type == 'Monthly':
-                    year, month = filter_value.split()
-                    month_num = datetime.strptime(month, '%B').month
-                    filtered_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'] == month_num)
-                    ]
-
-                st.subheader("Filtered Reports")
-                st.dataframe(filtered_df[["ID", "Zone", "Year", "Month", "Submission Date"]])
-
-                # View detailed report
-                view_report_details(filtered_df)
-
-            else:
-                st.write("You haven't submitted any reports yet.")
-
-        with tab3:
-            st.subheader("Submit New Report")
-            if user_group == "GPD":
-                st.write("Reporting functionality for GPD users is coming soon!")
-            elif user_group == "RZM":
-                st.write(f"RZM: {st.session_state.username}")
-                st.write(f"Zone: {zone}")
-
-                year = st.selectbox("Year", range(datetime.now().year, 2020, -1))
-                month = st.selectbox("Month", range(1, 13), format_func=lambda x: datetime(2000, x, 1).strftime('%B'))
-
-                report_fields = [
-                    "Wonder Alerts", "SYTK Alerts", "RRM", "Total Distribution", "No of Souls Won",
-                    "No of Rhapsody Outreaches", "No of Rhapsody Cells", "No of New Churches",
-                    "No of New Partners Enlisted", "No of Lingual Cells", "No of Language Churches",
-                    "No of Languages Sponsored", "No of Distribution Centers", "No of Groups Who Have Selected 1M",
-                    "No of Groups Achieved 1M Copies", "No of Groups Achieved 500k Copies",
-                    "No of Groups Achieved 250k Copies", "No of Groups Achieved 100k Copies",
-                    "Prayer Programs", "Partner Programs", "No of External Ministers",
-                    "ISEED Daily Partners", "Language Ambassadors"
-                ]
-
-                report_data = {}
-                for field in report_fields:
-                    report_data[field] = st.number_input(field, min_value=0, value=0)
-
-                if st.button("Submit Report"):
-                    success, message = save_report(st.session_state.username, zone, year, month, report_data)
-                    if success:
-                        st.success(message)
-                        time.sleep(1)  # Give the user a moment to see the success message
-                        st.rerun()  # Reload the page
-                    else:
-                        st.error(message)
 
 def clean_value_for_excel(value):
     if isinstance(value, str):
