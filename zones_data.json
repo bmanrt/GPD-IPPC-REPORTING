@@ -1,0 +1,39 @@
+{
+    "Region 1": [
+        "SA Zone 1", "Cape Town Zone 1", "SA Zone 5", "Cape Town Zone 2",
+        "SA Zone 2", "BLW Southern Africa Region", "Middle East Asia", "CE India",
+        "SA Zone 3", "Durban", "BLW Asia & North Africa Region"
+    ],
+    "Region 2": [
+        "UK Zone 3 Region 2", "CE Amsterdam DSP", "BLW Europe Region", "Western Europe Zone 4",
+        "UK Zone 3 Region 1", "USA Zone 2 Region 1", "Eastern Europe", "Australia Zone",
+        "Toronto Zone", "Western Europe Zone 2", "USA Zone 1 Region 2/Pacific Islands Region/New Zealand",
+        "USA Region 3", "BLW Canada Sub-Region", "Western Europe Zone 3", "Dallas Zone USA Region 2",
+        "UK Zone 4 Region 1", "Western Europe Zone 1", "UK Zone 1 (Region 2)", "UK Zone 2 Region 1",
+        "UK Zone 1 Region 1", "USA Zone 1 Region 1", "BLW USA Region 2", "Ottawa Zone",
+        "UK Zone 4 Region 2", "Quebec Zone", "BLW USA Region 1"
+    ],
+    "Region 3": [
+        "Kenya Zone", "Lagos Zone 1", "EWCA Zone 4", "CE Chad", "EWCA Zone 2",
+        "Ministry Center Warri", "Mid-West Zone", "South West Zone 2", "South West Zone 1",
+        "Lagos Zone 4", "Ibadan Zone 1", "Ibadan Zone 2", "Accra Zone", "South West Zone 3",
+        "EWCA Zone 5", "EWCA Zone 3", "MC Abeokuta", "EWCA Zone 6"
+    ],
+    "Region 4": [
+        "Abuja Zone 2", "CELVZ", "Lagos Zone 2", "South South Zone 3", "South-South Zone 2",
+        "Lagos Zone 3", "EWCA Zone 1", "South-South Zone 1", "DSC Sub Zone Warri", "Ministry Center Abuja",
+        "Ministry Center Calabar"
+    ],
+    "Region 5": [
+        "Middle Belt Region Zone 2", "North East Zone 1", "PH Zone 1", "Lagos Zone 6",
+        "Lagos Sub Zone B", "Middle Belt Region Zone 1", "PH Zone 3", "Lagos Sub Zone A",
+        "South West Zone 5", "Onitsha Zone", "Abuja Zone", "PH Zone 2", "North West Zone 2",
+        "Lagos Zone 5", "Northwest Zone 1", "Ministry Center Ibadan", "South West Zone 4",
+        "North Central Zone 1", "North Central Zone 2"
+    ],
+    "Region 6": [
+        "Lagos Sub Zone C", "Benin Zone 2", "Aba Zone", "Benin Zone 1", "Loveworld Church Zone",
+        "South East Zone 1", "BLW West Africa Region", "BLW East & Central Africa Region", "South East Zone 3",
+        "Edo North & Central", "BLW Nigeria Region"
+    ]
+}
