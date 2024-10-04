@@ -17,6 +17,13 @@ import time
 import struct
 import re
 
+# Add these lines at the beginning of the script, after the imports
+st.set_page_config(
+    page_title="GPD ADMIN",
+    page_icon="🏢",
+    layout="wide"
+)
+
 # Initialize session state
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
@@ -234,7 +241,7 @@ def check_edit_permission(username, report_id):
 
 # Main app
 def main():
-    st.title("GPD Admin Portal")
+    st.title("GPD ADMIN")  # Change the title here
 
     if st.session_state.logged_in:
         display_dashboard()
