@@ -415,8 +415,8 @@ def display_admin_dashboard():
             report_to_edit = report_df[report_df['ID'] == report_id_to_edit].iloc[0]
             
             with st.form("edit_report_form"):
-                new_username = st.text_input("Username", value=report_to_edit['Username'])
-                new_zone = st.text_input("Zone", value=report_to_edit['Zone'])
+                new_username = st.text_input("Username", value=report_to_edit['Username'], key=f"username_{report_id_to_edit}")
+                new_zone = st.text_input("Zone", value=report_to_edit['Zone'], key=f"zone_{report_id_to_edit}")
                 
                 # Handle potentially binary data for Year and Month
                 try:
@@ -429,8 +429,8 @@ def display_admin_dashboard():
                 except (struct.error, ValueError):
                     month_value = 1  # Default to January if conversion fails
                 
-                new_year = st.number_input("Year", min_value=2020, max_value=datetime.now().year, value=year_value)
-                new_month = st.selectbox("Month", range(1, 13), index=month_value-1, format_func=lambda x: datetime(2000, x, 1).strftime('%B'))
+                new_year = st.number_input("Year", min_value=2020, max_value=datetime.now().year, value=year_value, key=f"year_{report_id_to_edit}")
+                new_month = st.selectbox("Month", range(1, 13), index=month_value-1, format_func=lambda x: datetime(2000, x, 1).strftime('%B'), key=f"month_{report_id_to_edit}")
                 
                 report_data = json.loads(report_to_edit['Report Data'])
                 new_report_data = {}
@@ -438,10 +438,10 @@ def display_admin_dashboard():
                     try:
                         if isinstance(value, bytes):
                             value = struct.unpack('q', value)[0]
-                        new_report_data[key] = st.number_input(key, value=int(value))
+                        new_report_data[key] = st.number_input(key, value=int(value), key=f"admin_edit_{report_id_to_edit}_{key}")
                     except (ValueError, struct.error):
                         st.error(f"Invalid value for {key}: {value}")
-                        new_report_data[key] = st.number_input(key, value=0)
+                        new_report_data[key] = st.number_input(key, value=0, key=f"admin_edit_{report_id_to_edit}_{key}_error")
 
                 if st.form_submit_button("Update Report"):
                     update_report(report_id_to_edit, new_username, new_zone, new_year, new_month, new_report_data)
@@ -969,12 +969,12 @@ def edit_report(report_id, report_df):
         try:
             if isinstance(value, bytes):
                 value = struct.unpack('q', value)[0]
-            new_report_data[field] = st.number_input(field, value=int(value), key=f"edit_{field}")
+            new_report_data[field] = st.number_input(field, value=int(value), key=f"edit_{report_id}_{field}")
         except (ValueError, struct.error):
             st.error(f"Invalid value for {field}: {value}")
-            new_report_data[field] = st.number_input(field, value=0, key=f"edit_{field}")
+            new_report_data[field] = st.number_input(field, value=0, key=f"edit_{report_id}_{field}_error")
     
-    if st.button("Save Changes"):
+    if st.button("Save Changes", key=f"save_{report_id}"):
         update_report(report_id, report['Username'], report['Zone'], year, month, new_report_data)
         st.success("Report updated successfully!")
         time.sleep(1)  # Give the user a moment to see the success message
