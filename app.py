@@ -242,11 +242,12 @@ def display_dashboard():
         st.rerun()
 
 def display_admin_dashboard():
+    # Remove "GPD Admin Portal" from here
     st.write("Welcome, Super Admin!")
     st.subheader("Super Admin Dashboard")
 
     # Create tabs for different admin functions
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Dashboard", "User Management", "View Reports", "Manage Reports", "RZM Reports"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "User Management", "View Reports", "Manage Reports"])
 
     with tab1:
         st.subheader("Admin Dashboard")
@@ -456,120 +457,6 @@ def display_admin_dashboard():
                 st.rerun()
         else:
             st.write("No reports submitted yet.")
-
-    with tab5:
-        st.subheader("RZM Reports")
-        rzm_reports = fetch_reports()
-        if rzm_reports:
-            report_df = pd.DataFrame(rzm_reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
-            
-            # Filter to show only RZM reports
-            rzm_users = fetch_rzm_users()
-            rzm_usernames = [user[0] for user in rzm_users]
-            report_df = report_df[report_df['Username'].isin(rzm_usernames)]
-
-            # Search and filter options
-            search_term = st.text_input("Search reports", "")
-            
-            # Filter reports based on search term
-            if search_term:
-                report_df = report_df[
-                    report_df.apply(lambda row: search_term.lower() in ' '.join(row.astype(str)).lower(), axis=1)
-                ]
-
-            # Filter options
-            st.subheader("Filter Reports")
-            
-            # Username dropdown
-            usernames = ['All'] + sorted(report_df['Username'].unique().tolist())
-            filter_username = st.selectbox("Filter by RZM", usernames)
-            
-            # Zone dropdown
-            zones = ['All'] + sorted(report_df['Zone'].unique().tolist())
-            filter_zone = st.selectbox("Filter by Zone", zones)
-            
-            time_period_options = get_time_period_options()
-            filter_type = st.selectbox("Filter by Time Period", ['All'] + list(time_period_options.keys()))
-            
-            if filter_type != 'All':
-                filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type])
-
-            # Apply filters
-            if filter_username != 'All':
-                report_df = report_df[report_df['Username'] == filter_username]
-            if filter_zone != 'All':
-                report_df = report_df[report_df['Zone'] == filter_zone]
-
-            if filter_type != 'All':
-                if filter_type == 'Annual':
-                    report_df = report_df[report_df['Year'] == int(filter_value)]
-                elif filter_type == 'Quarterly':
-                    year, quarter = filter_value.split()
-                    quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
-                    report_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'].isin(quarter_month_map[quarter]))
-                    ]
-                elif filter_type == 'Half-Year':
-                    year, half = filter_value.split()
-                    half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
-                    report_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'].isin(half_year_month_map[half]))
-                    ]
-                elif filter_type == 'Monthly':
-                    year, month = filter_value.split()
-                    month_num = datetime.strptime(month, '%B').month
-                    report_df = report_df[
-                        (report_df['Year'] == int(year)) & 
-                        (report_df['Month'] == month_num)
-                    ]
-
-            st.subheader("Filtered RZM Reports")
-            st.dataframe(report_df[["ID", "Username", "Zone", "Year", "Month", "Submission Date"]])
-
-            # View and edit detailed report
-            if not report_df.empty:
-                report_id = st.selectbox("Select a report to view/edit details", report_df['ID'])
-                report = report_df[report_df['ID'] == report_id].iloc[0]
-                
-                with st.expander("View/Edit Report Details"):
-                    st.write(f"Report ID: {report['ID']}")
-                    st.write(f"Submitted by: {report['Username']}")
-                    st.write(f"Zone: {report['Zone']}")
-                    st.write(f"Year: {report['Year']}")
-                    st.write(f"Month: {report['Month']}")
-                    st.write(f"Submission Date: {report['Submission Date']}")
-                    
-                    report_data = json.loads(report['Report Data'])
-                    edited_report_data = {}
-                    
-                    for key, value in report_data.items():
-                        edited_report_data[key] = st.number_input(key, value=int(value), key=f"edit_{report['ID']}_{key}")
-                    
-                    if st.button("Update Report"):
-                        update_report(report['ID'], report['Username'], report['Zone'], report['Year'], report['Month'], edited_report_data)
-                        st.success(f"Report {report['ID']} updated successfully!")
-                        st.rerun()
-
-            # Delete report
-            st.subheader("Delete Report")
-            report_id_to_delete = st.selectbox("Select a report to delete", report_df['ID'])
-            if st.button("Delete Report"):
-                delete_report(report_id_to_delete)
-                st.success(f"Report {report_id_to_delete} deleted successfully!")
-                st.rerun()
-        else:
-            st.write("No RZM reports submitted yet.")
-
-# Add this new function to fetch RZM users
-def fetch_rzm_users():
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute("SELECT username FROM users WHERE user_group='RZM'")
-    rzm_users = c.fetchall()
-    conn.close()
-    return rzm_users
 
 # Add these new functions to handle report updates and deletions
 def update_report(report_id, username, zone, year, month, report_data):
