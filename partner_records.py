@@ -18,11 +18,7 @@ def init_partner_db():
     conn = sqlite3.connect('partner_records.db')
     c = conn.cursor()
     
-    # Drop existing tables if they exist
-    c.execute("DROP TABLE IF EXISTS adult_partners")
-    c.execute("DROP TABLE IF EXISTS children_partners")
-    c.execute("DROP TABLE IF EXISTS teenager_partners")
-    c.execute("DROP TABLE IF EXISTS external_partners")
+   
     
     # Create tables with simplified schema
     tables = ['adult_partners', 'children_partners', 'teenager_partners', 'external_partners']

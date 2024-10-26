@@ -268,7 +268,7 @@ def process_uploaded_records(df, selected_zone):
             'ror': []
         }
         
-        # Process partner sheets
+        # Process partner sheets with amount calculations
         partner_sheets = {
             "Adult Partners": ("Adult Partner", "partners"),
             "Child Partners": ("Child Partner", "partners"),
@@ -296,6 +296,28 @@ def process_uploaded_records(df, selected_zone):
                 
                 if sheet_name in partner_sheets:
                     category, sheet_type = partner_sheets[sheet_name]
+                    
+                    # Calculate total amount for partners
+                    if category != "External Partner":
+                        sheet_df['Total Amount'] = sheet_df[[
+                            'Total Amount Given for Wonder Challenge',
+                            'Total Amount Given for Rhapsody Languages',
+                            'Total Amount Given for Kiddies Products',
+                            'Total Amount Given for Teevo',
+                            'Total Amount Given for Braille(NOLB)',
+                            'Total Amount Given for Youth Aglow',
+                            'Total Given for Local Distribution',
+                            'Total Given for Subscriptions/Dubais'
+                        ]].fillna(0).sum(axis=1)
+                    else:
+                        sheet_df['Total Amount'] = sheet_df[[
+                            'Rhapsody Subscriptions and Dubais',
+                            'Sponsorship Through Retail Center',
+                            'Translators Network International',
+                            'Rhapsody Influencers Network',
+                            'RIM'
+                        ]].fillna(0).sum(axis=1)
+
                     if validate_sheet_data(sheet_df, CATEGORIES[category]):
                         sheet_df['Category'] = category
                         valid_sheets[sheet_type].append(sheet_df)
@@ -323,7 +345,7 @@ def process_uploaded_records(df, selected_zone):
             success_count = 0
             error_count = 0
             
-            # Save partner records
+            # Save partner records with calculated totals
             if valid_sheets['partners']:
                 partner_df = pd.concat(valid_sheets['partners'], ignore_index=True)
                 if save_partner_records(partner_df, selected_zone, currency):
@@ -363,36 +385,104 @@ def process_uploaded_records(df, selected_zone):
         st.error("Please use the Excel template. CSV uploads are not supported.")
 
 def validate_sheet_data(df, required_fields):
-    """Validate sheet data against required fields, excluding Zone Name and Currency"""
+    """Validate sheet data against required fields, with more flexible validation"""
     try:
-        # Remove Zone Name and Currency from required fields
-        required_fields = [f for f in required_fields 
-                         if f not in ["Zone Name", "Currency"]]
+        # Determine category based on the sheet's required fields
+        category_mapping = {
+            frozenset(['First Name', 'Surname', 'Church', 'Group']): 'Adult Partner',
+            frozenset(['First Name', 'Surname', 'Age', 'Church', 'Group']): 'Child Partner',
+            frozenset(['First Name', 'Surname', 'Church', 'Group', 'Birthdays']): 'Teenager Partner',
+            frozenset(['First Name', 'Surname', 'Rhapsody Subscriptions and Dubais']): 'External Partner',
+            frozenset(['Church Name', 'Group Name', 'Church Pastor']): 'Church Sponsorship',
+            frozenset(['Cell Name', 'Cell Leader', 'Church', 'Group']): 'Cell',
+            frozenset(['Group Name', 'Reachout World Programs']): 'ROR Outreaches'
+        }
+
+        # Get the set of fields present in the DataFrame
+        df_fields = set(df.columns)
         
-        # Check required columns
-        missing_fields = set(required_fields) - set(df.columns)
-        if missing_fields:
-            st.error(f"Missing required fields: {', '.join(missing_fields)}")
+        # Find matching category
+        category = None
+        for fields, cat in category_mapping.items():
+            if fields.issubset(df_fields):
+                category = cat
+                break
+        
+        if not category:
+            st.error(f"Could not determine record type from columns: {', '.join(df_fields)}")
             return False
-        
-        # Check for empty required fields
-        for field in required_fields:
-            if df[field].isnull().any():
-                st.error(f"Found empty values in required field: {field}")
-                return False
-        
+
+        # Validate numeric fields based on category
+        numeric_fields = []
+        if category in ['Adult Partner', 'Child Partner', 'Teenager Partner']:
+            numeric_fields = [
+                'Total Amount Given for Wonder Challenge',
+                'Total Amount Given for Rhapsody Languages',
+                'Total Amount Given for Kiddies Products',
+                'Total Amount Given for Teevo',
+                'Total Amount Given for Braille(NOLB)',
+                'Total Amount Given for Youth Aglow',
+                'Total Given for Local Distribution',
+                'Total Given for Subscriptions/Dubais'
+            ]
+        elif category == 'External Partner':
+            numeric_fields = [
+                'Rhapsody Subscriptions and Dubais',
+                'Sponsorship Through Retail Center',
+                'Quantity Sponsored Through IRCON',
+                'Translators Network International',
+                'Rhapsody Influencers Network',
+                'RIM',
+                'Total'
+            ]
+        elif category == 'Church Sponsorship':
+            numeric_fields = [
+                'Total Quantity Sponsored',
+                'Total Amount',
+                'Kiddies Products',
+                'Teevo',
+                'Braille(NOLB)',
+                'Languages',
+                'Youth Aglow'
+            ]
+        elif category == 'Cell':
+            numeric_fields = [
+                'Total Quantity Sponsored',
+                'Total Amount Received',
+                'Total Amount Given',
+                'Kiddies Products',
+                'Teevo',
+                'Braille',
+                'Languages',
+                'Youth Aglow'
+            ]
+        elif category == 'ROR Outreaches':
+            numeric_fields = [
+                'Reachout World Programs',
+                'Rhapathon with Pastor Chris',
+                'Reachout World Nations',
+                'Say Yes to Kids',
+                'Teevolution',
+                'Youth Aglow',
+                'No One Left Behind',
+                'Penetrating with Truth',
+                'Penetrating with Languages',
+                'Adopt a Street',
+                'Total Amount'
+            ]
+
         # Validate numeric fields
-        amount_fields = [col for col in df.columns if any(
-            term in col.lower() for term in ['amount', 'total', 'quantity']
-        )]
-        for field in amount_fields:
-            try:
-                pd.to_numeric(df[field])
-            except:
-                st.error(f"Non-numeric values found in field: {field}")
-                return False
-        
+        for field in numeric_fields:
+            if field in df.columns:
+                try:
+                    # Replace empty or non-numeric values with 0
+                    df[field] = pd.to_numeric(df[field].fillna(0))
+                except Exception as e:
+                    st.error(f"Non-numeric values found in field: {field}")
+                    return False
+
         return True
+        
     except Exception as e:
         st.error(f"Validation error: {str(e)}")
         return False
@@ -463,19 +553,43 @@ def record_templates_ui():
 def save_partner_records(df, selected_zone, currency):
     """Save partner records to database"""
     try:
-        from partner_records import add_partner_record
+        from partner_records import add_partner_record, add_external_partner_record
         
         for _, row in df.iterrows():
             partner_data = row.to_dict()
             partner_data['zone'] = selected_zone
             partner_data['currency'] = currency
             
-            if row['Category'] == 'Adult Partner':
-                success, message = add_partner_record(partner_data)
-            elif row['Category'] == 'Child Partner':
-                success, message = add_partner_record(partner_data, is_child=True)
-            elif row['Category'] == 'Teenager Partner':
-                success, message = add_partner_record(partner_data, is_teenager=True)
+            # Ensure total amount is included
+            if 'Total Amount' not in partner_data:
+                if row['Category'] != 'External Partner':
+                    partner_data['total_amount'] = sum([
+                        float(partner_data.get('Total Amount Given for Wonder Challenge', 0)),
+                        float(partner_data.get('Total Amount Given for Rhapsody Languages', 0)),
+                        float(partner_data.get('Total Amount Given for Kiddies Products', 0)),
+                        float(partner_data.get('Total Amount Given for Teevo', 0)),
+                        float(partner_data.get('Total Amount Given for Braille(NOLB)', 0)),
+                        float(partner_data.get('Total Amount Given for Youth Aglow', 0)),
+                        float(partner_data.get('Total Given for Local Distribution', 0)),
+                        float(partner_data.get('Total Given for Subscriptions/Dubais', 0))
+                    ])
+                else:
+                    partner_data['total_amount'] = sum([
+                        float(partner_data.get('Rhapsody Subscriptions and Dubais', 0)),
+                        float(partner_data.get('Sponsorship Through Retail Center', 0)),
+                        float(partner_data.get('Translators Network International', 0)),
+                        float(partner_data.get('Rhapsody Influencers Network', 0)),
+                        float(partner_data.get('RIM', 0))
+                    ])
+            
+            if row['Category'] == 'External Partner':
+                success, message = add_external_partner_record(partner_data)
+            else:
+                success, message = add_partner_record(
+                    partner_data,
+                    is_child=(row['Category'] == 'Child Partner'),
+                    is_teenager=(row['Category'] == 'Teenager Partner')
+                )
             
             if not success:
                 st.error(message)
@@ -492,14 +606,68 @@ def save_church_records(df, selected_zone, currency):
         from church_records import handle_church_submit, handle_cell_submit
         
         for _, row in df.iterrows():
-            record_data = row.to_dict()
-            record_data['zone_name'] = selected_zone
-            record_data['currency'] = currency
+            # Helper function to safely convert to int
+            def safe_int(value, default=0):
+                try:
+                    if pd.isna(value):
+                        return default
+                    return int(float(value))
+                except (ValueError, TypeError):
+                    return default
+            
+            # Calculate total amount from quantities
+            quantities = {
+                'kiddies_products': safe_int(row.get('Kiddies Products')),
+                'teevo': safe_int(row.get('Teevo')),
+                'braille_nolb': safe_int(row.get('Braille(NOLB)')),
+                'languages': safe_int(row.get('Languages')),
+                'youth_aglow': safe_int(row.get('Youth Aglow'))
+            }
+            
+            total_amount = sum(quantities.values())
+            
+            record_data = {
+                'zone_name': selected_zone,
+                'group_name': str(row.get('Group Name', '')),
+                'church_name': str(row.get('Church Name', '')),
+                'church_pastor': str(row.get('Church Pastor', '')),
+                'kingschat_phone': str(row.get('KingsChat Phone Number', '')),
+                'email': str(row.get('Email Address', '')),
+                'total_quantity': safe_int(row.get('Total Quantity Sponsored')),
+                'currency': currency,
+                'total_amount': total_amount,
+                **quantities
+            }
             
             if row['Category'] in ['Category A', 'Category B', 'Church']:
                 success, message = handle_church_submit(record_data, row['Category'][-1])
             elif row['Category'] == 'Cell':
-                success, message = handle_cell_submit(record_data)
+                # For cell records, calculate received and given amounts
+                cell_quantities = {
+                    'total_quantity': safe_int(row.get('Total Quantity Sponsored')),
+                    'kiddies_products': safe_int(row.get('Kiddies Products')),
+                    'teevo': safe_int(row.get('Teevo')),
+                    'braille': safe_int(row.get('Braille')),  # Note: Different field name for cells
+                    'languages': safe_int(row.get('Languages')),
+                    'youth_aglow': safe_int(row.get('Youth Aglow'))
+                }
+                
+                total_amount = sum(cell_quantities.values())
+                
+                cell_data = {
+                    'zone_name': selected_zone,
+                    'cell_name': str(row.get('Cell Name', '')),
+                    'cell_leader': str(row.get('Cell Leader', '')),
+                    'kingschat_phone': str(row.get('KingsChat Phone Number', '')),
+                    'email': str(row.get('Email Address', '')),
+                    'church': str(row.get('Church', '')),
+                    'group': str(row.get('Group', '')),
+                    'currency': currency,
+                    'total_amount_received': total_amount,
+                    'total_amount_given': total_amount,
+                    **cell_quantities
+                }
+                success, message = handle_cell_submit(cell_data)
             
             if not success:
                 st.error(message)
@@ -556,6 +724,54 @@ def save_ror_records(df, selected_zone, currency):
     except Exception as e:
         st.error(f"Error saving ROR records: {e}")
         return False
+
+# Add these constants near the top of the file
+REQUIRED_FIELDS = {
+    "Adult Partner": [
+        "First Name",
+        "Surname",
+        "Church",
+        "Group"
+    ],
+    
+    "Child Partner": [
+        "First Name",
+        "Surname",
+        "Age",
+        "Church",
+        "Group"
+    ],
+    
+    "Teenager Partner": [
+        "First Name",
+        "Surname",
+        "Church",
+        "Group"
+    ],
+    
+    "External Partner": [
+        "First Name",
+        "Surname"
+    ],
+    
+    "Church Sponsorship": [
+        "Church Name",
+        "Group Name",
+        "Total Amount"
+    ],
+    
+    "Cell": [
+        "Cell Name",
+        "Cell Leader",
+        "Church",
+        "Group"
+    ],
+    
+    "ROR Outreaches": [
+        "Group Name",
+        "Total Amount"
+    ]
+}
 
 if __name__ == "__main__":
     record_templates_ui()
