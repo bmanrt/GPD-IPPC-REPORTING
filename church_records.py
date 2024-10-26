@@ -429,12 +429,44 @@ def cell_records_ui():
 def church_records_ui():
     st.title("Church Records")
     
+    # Get user's zone if they are RZM
+    if st.session_state.user_group == "RZM":
+        user_details = get_user_details(st.session_state.username)
+        if user_details:
+            _, _, _, selected_zone = user_details
+            if selected_zone:
+                st.info(f"Adding records for: {selected_zone}")
+                st.session_state.zone = selected_zone  # Store zone in session state
+            else:
+                st.error("No zone assigned to your account")
+                return
+        else:
+            st.error("Could not retrieve user details")
+            return
+    elif st.session_state.is_super_admin:
+        # Load zones data for admin
+        with open('zones_data.json', 'r') as f:
+            zones_data = json.load(f)
+        
+        # First select region
+        regions = list(zones_data.keys())
+        selected_region = st.selectbox("Select Region", regions)
+        
+        # Then select zone from that region
+        if selected_region:
+            zones = zones_data[selected_region]
+            selected_zone = st.selectbox("Select Zone", zones)
+            st.session_state.zone = selected_zone  # Store zone in session state
+    else:
+        st.error("You don't have permission to add church records")
+        return
+    
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "ROR Outreaches",
         "Category A Churches",
         "Category B Churches",
         "Churches",
-        "Cell Records"  # Removed View All Records and Export Data tabs
+        "Cell Records"
     ])
 
     with tab1:
@@ -503,3 +535,12 @@ def check_db_needs_migration():
         return True
     finally:
         conn.close()
+
+# Add this function at the top of the file
+def get_user_details(username):
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("SELECT user_group, sub_group, region, zone FROM users WHERE username=?", (username,))
+    user_details = c.fetchone()
+    conn.close()
+    return user_details

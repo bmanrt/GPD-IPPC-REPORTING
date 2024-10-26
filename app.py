@@ -467,14 +467,15 @@ def display_admin_dashboard():
     st.title("Admin Dashboard")
     
     # Create tabs for different admin functions
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "User Management", 
         "Record Templates", 
         "View Reports",
         "Partner Analytics",
         "Church Analytics",
-        "ROR Analytics",  # Separate ROR Analytics tab
-        "Debug Database"
+        "ROR Analytics",
+        "Debug Database",
+        "Purge Database"  # New tab
     ])
     
     with tab1:
@@ -493,10 +494,13 @@ def display_admin_dashboard():
         church_analytics_ui()
         
     with tab6:
-        ror_analytics_ui()  # Added ROR Analytics UI
+        ror_analytics_ui()
         
     with tab7:
         debug_database_ui()
+        
+    with tab8:
+        purge_database_ui()  # New tab content
 
 def debug_database_ui():
     st.header("Database Management")
@@ -660,6 +664,145 @@ def debug_database_ui():
                     except Exception as e:
                         st.error(f"Error creating backups directory: {e}")
 
+# Add this function to handle database purging
+def purge_database_ui():
+    """Admin interface for purging databases"""
+    st.subheader("Database Management")
+    
+    st.warning("""
+    ⚠️ **WARNING**: This section allows permanent deletion of database records. 
+    These actions cannot be undone. Please proceed with caution.
+    """)
+    
+    # Create tabs for different databases
+    tab1, tab2, tab3 = st.tabs([
+        "Partner Records",
+        "Church Records",
+        "User Records"
+    ])
+    
+    with tab1:
+        st.subheader("Purge Partner Records")
+        
+        # Partner record types
+        partner_types = [
+            "All Partner Records",
+            "Adult Partners",
+            "Child Partners",
+            "Teenager Partners",
+            "External Partners"
+        ]
+        
+        selected_partner_type = st.selectbox(
+            "Select Record Type to Purge",
+            partner_types,
+            key="purge_partner_type"
+        )
+        
+        if st.button("Purge Selected Partner Records", key="purge_partner"):
+            if 'confirm_purge_partner' not in st.session_state:
+                st.session_state.confirm_purge_partner = True
+                st.warning(f"Are you sure you want to purge {selected_partner_type}? Click again to confirm.")
+            else:
+                try:
+                    conn = sqlite3.connect('partner_records.db')
+                    c = conn.cursor()
+                    
+                    if selected_partner_type == "All Partner Records":
+                        tables = ['adult_partners', 'children_partners', 'teenager_partners', 'external_partners']
+                        for table in tables:
+                            c.execute(f"DELETE FROM {table}")
+                    else:
+                        table_map = {
+                            'Adult Partners': 'adult_partners',
+                            'Child Partners': 'children_partners',
+                            'Teenager Partners': 'teenager_partners',
+                            'External Partners': 'external_partners'
+                        }
+                        table = table_map.get(selected_partner_type)
+                        if table:
+                            c.execute(f"DELETE FROM {table}")
+                    
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Successfully purged {selected_partner_type}")
+                    del st.session_state.confirm_purge_partner
+                except Exception as e:
+                    st.error(f"Error purging records: {e}")
+    
+    with tab2:
+        st.subheader("Purge Church Records")
+        
+        # Church record types
+        church_types = [
+            "All Church Records",
+            "Category A Churches",
+            "Category B Churches",
+            "Churches",
+            "Cell Records",
+            "ROR Records"
+        ]
+        
+        selected_church_type = st.selectbox(
+            "Select Record Type to Purge",
+            church_types,
+            key="purge_church_type"
+        )
+        
+        if st.button("Purge Selected Church Records", key="purge_church"):
+            if 'confirm_purge_church' not in st.session_state:
+                st.session_state.confirm_purge_church = True
+                st.warning(f"Are you sure you want to purge {selected_church_type}? Click again to confirm.")
+            else:
+                try:
+                    conn = sqlite3.connect('church_partners.db')
+                    c = conn.cursor()
+                    
+                    if selected_church_type == "All Church Records":
+                        c.execute("DELETE FROM church_partner_records")
+                    else:
+                        record_type_map = {
+                            'Category A Churches': 'Category A',
+                            'Category B Churches': 'Category B',
+                            'Churches': 'Church',
+                            'Cell Records': 'Cell',
+                            'ROR Records': 'ROR'
+                        }
+                        record_type = record_type_map.get(selected_church_type)
+                        if record_type:
+                            c.execute("DELETE FROM church_partner_records WHERE record_type = ?", (record_type,))
+                    
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Successfully purged {selected_church_type}")
+                    del st.session_state.confirm_purge_church
+                except Exception as e:
+                    st.error(f"Error purging records: {e}")
+    
+    with tab3:
+        st.subheader("Purge User Records")
+        
+        st.error("""
+        ⚠️ **CRITICAL WARNING**: Purging user records will remove all user accounts except the admin account.
+        This will require users to re-register.
+        """)
+        
+        if st.button("Purge All User Records", key="purge_users"):
+            if 'confirm_purge_users' not in st.session_state:
+                st.session_state.confirm_purge_users = True
+                st.warning("Are you sure you want to purge all user records? Click again to confirm.")
+            else:
+                try:
+                    conn = sqlite3.connect('users.db')
+                    c = conn.cursor()
+                    c.execute("DELETE FROM users WHERE username != 'admin'")
+                    conn.commit()
+                    conn.close()
+                    st.success("Successfully purged all user records (except admin)")
+                    del st.session_state.confirm_purge_users
+                except Exception as e:
+                    st.error(f"Error purging user records: {e}")
+
 def display_user_dashboard():
     try:
         st.write(f"Welcome, {st.session_state.username}!")
@@ -670,11 +813,12 @@ def display_user_dashboard():
 
         # Create tabs for different sections
         if user_group == "RZM":
-            tab1, tab2, tab3, tab4 = st.tabs([
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "Dashboard", 
                 "Partner Records", 
                 "Church Records",
-                "Upload Report"
+                "Upload Report",
+                "View Reports"  # Added View Reports tab
             ])
         else:
             tab1, tab2, tab3 = st.tabs(["Dashboard", "View Your Submitted Reports", "Submit New Report"])
@@ -691,9 +835,231 @@ def display_user_dashboard():
                 
             with tab4:
                 record_templates_ui()
+                
+            with tab5:
+                # View Reports tab with read-only access
+                view_reports_ui_readonly(zone)
 
     except Exception as e:
         st.error(f"An error occurred while displaying the user dashboard: {e}")
+
+# Add this new function for read-only reports view
+def view_reports_ui_readonly(user_zone):
+    """View reports interface for RZMs with financial edit capability"""
+    st.subheader("View Reports")
+    
+    # Create tabs for different types of reports
+    tab1, tab2, tab3 = st.tabs([
+        "Partner Reports",
+        "Church Sponsorship Reports", 
+        "ROR Outreaches Reports"
+    ])
+    
+    with tab1:
+        # Get filtered partner records for the RZM's zone
+        filtered_df = get_filtered_partner_records(user_zone)
+        if filtered_df.empty:
+            st.warning("No partner records found for your zone.")
+        else:
+            # Enhanced search functionality for viewing
+            view_search_term = st.text_input(
+                "Search Records (ID, Name, Title, Email, Church, Group, Zone, Phone)", 
+                key="rzm_partner_view_search"
+            )
+            if view_search_term:
+                filtered_df = apply_partner_search(filtered_df, view_search_term)
+            
+            st.dataframe(filtered_df, use_container_width=True)
+            
+            # Separate search for edit section
+            st.subheader("Edit Financial Records")
+            edit_search_term = st.text_input(
+                "Search Record to Edit (ID, Name, Title, Email, Church, Group, Zone, Phone)",
+                key="rzm_partner_edit_search"
+            )
+            
+            edit_results_df = filtered_df
+            if edit_search_term:
+                edit_results_df = apply_partner_search(filtered_df, edit_search_term)
+            
+            if not edit_results_df.empty:
+                st.write("### Search Results")
+                for idx, row in edit_results_df.iterrows():
+                    record_id = str(row['id'])
+                    unique_id = get_unique_record_id(record_id, row['record_type'])
+                    col1, col2 = st.columns([4, 1])
+                    
+                    with col1:
+                        st.write(f"""
+                        **ID:** {record_id} ({row['record_type']})  
+                        **Name:** {row['title']} {row['first_name']} {row['surname']}  
+                        **Zone:** {row['zone']}
+                        """)
+                    
+                    with col2:
+                        if st.button("Edit", key=f"edit_btn_{unique_id}"):
+                            st.session_state.editing_record = record_id
+                            st.session_state.editing_type = row['record_type']
+                
+                # Show edit form if a record is selected
+                if hasattr(st.session_state, 'editing_record'):
+                    record = get_partner_record(
+                        st.session_state.editing_record,
+                        st.session_state.editing_type
+                    )
+                    
+                    if record:
+                        unique_id = get_unique_record_id(
+                            st.session_state.editing_record,
+                            st.session_state.editing_type
+                        )
+                        with st.form(key=f"edit_form_{unique_id}"):
+                            st.write(f"""
+                            ### Edit Financial Records
+                            **Partner Type:** {st.session_state.editing_type}  
+                            **Name:** {record.get('first_name')} {record.get('surname')}
+                            """)
+                            
+                            # Financial fields with unique keys
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                wonder_challenge = st.number_input(
+                                    "Wonder Challenge", 
+                                    value=float(record.get('total_wonder_challenge', 0)),
+                                    key=f"wc_{unique_id}"
+                                )
+                                kiddies_products = st.number_input(
+                                    "Kiddies Products", 
+                                    value=float(record.get('total_kiddies_products', 0)),
+                                    key=f"kp_{unique_id}"
+                                )
+                                braille_nolb = st.number_input(
+                                    "Braille(NOLB)", 
+                                    value=float(record.get('total_braille_nolb', 0)),
+                                    key=f"bn_{unique_id}"
+                                )
+                                local_distribution = st.number_input(
+                                    "Local Distribution", 
+                                    value=float(record.get('total_local_distribution', 0)),
+                                    key=f"ld_{unique_id}"
+                                )
+                            
+                            with col2:
+                                rhapsody_languages = st.number_input(
+                                    "Rhapsody Languages", 
+                                    value=float(record.get('total_rhapsody_languages', 0)),
+                                    key=f"rl_{unique_id}"
+                                )
+                                teevo = st.number_input(
+                                    "Teevo", 
+                                    value=float(record.get('total_teevo', 0)),
+                                    key=f"tv_{unique_id}"
+                                )
+                                youth_aglow = st.number_input(
+                                    "Youth Aglow", 
+                                    value=float(record.get('total_youth_aglow', 0)),
+                                    key=f"ya_{unique_id}"
+                                )
+                                subscriptions_dubais = st.number_input(
+                                    "Subscriptions/Dubais", 
+                                    value=float(record.get('total_subscriptions_dubais', 0)),
+                                    key=f"sd_{unique_id}"
+                                )
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                submit = st.form_submit_button("Update Financial Records")
+                            with col2:
+                                cancel = st.form_submit_button("Cancel")
+                            
+                            if submit:
+                                updated_amounts = {
+                                    'total_wonder_challenge': wonder_challenge,
+                                    'total_rhapsody_languages': rhapsody_languages,
+                                    'total_kiddies_products': kiddies_products,
+                                    'total_teevo': teevo,
+                                    'total_braille_nolb': braille_nolb,
+                                    'total_youth_aglow': youth_aglow,
+                                    'total_local_distribution': local_distribution,
+                                    'total_subscriptions_dubais': subscriptions_dubais
+                                }
+                                
+                                success, message = edit_financial_record(
+                                    st.session_state.editing_record,
+                                    st.session_state.editing_type,
+                                    updated_amounts
+                                )
+                                
+                                if success:
+                                    st.success(message)
+                                    del st.session_state.editing_record
+                                    del st.session_state.editing_type
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                else:
+                                    st.error(message)
+                            
+                            if cancel:
+                                del st.session_state.editing_record
+                                del st.session_state.editing_type
+                                st.rerun()
+
+    with tab2:
+        # Get filtered church records for the RZM's zone
+        filtered_df = get_filtered_church_records(user_zone)
+        if filtered_df.empty:
+            st.warning("No church sponsorship records found for your zone.")
+        else:
+            # Enhanced search functionality
+            search_term = st.text_input("Search by ID, Church Name, Cell Name, Pastor, Leader, Group, Zone", 
+                                      key="rzm_church_search")
+            if search_term:
+                filtered_df = filtered_df[
+                    filtered_df['ID'].astype(str).str.contains(search_term, case=False, na=False) |
+                    filtered_df['Church Name'].str.contains(search_term, case=False, na=False) |
+                    filtered_df['Cell Name'].str.contains(search_term, case=False, na=False) |
+                    filtered_df['Church Pastor'].str.contains(search_term, case=False, na=False) |
+                    filtered_df['Cell Leader'].str.contains(search_term, case=False, na=False) |
+                    filtered_df['Group'].str.contains(search_term, case=False, na=False) |
+                    filtered_df['Zone'].str.contains(search_term, case=False, na=False)
+                ]
+            
+            st.dataframe(filtered_df, use_container_width=True)
+            
+            # Add export functionality
+            if st.button("Export to Excel", key="export_churches"):
+                excel_data = download_excel(filtered_df, "church_records.xlsx")
+                st.download_button(
+                    label="Download Church Records",
+                    data=excel_data,
+                    file_name="church_records.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        
+    with tab3:
+        # Get filtered ROR records for the RZM's zone
+        filtered_df = get_filtered_ror_records(user_zone)
+        if filtered_df.empty:
+            st.warning("No ROR outreach records found for your zone.")
+        else:
+            # Add search functionality
+            search_term = st.text_input("Search by Group Name or Program", key="rzm_ror_search")
+            if search_term:
+                filtered_df = filtered_df[
+                    filtered_df['Group'].str.contains(search_term, case=False, na=False)
+                ]
+            
+            st.dataframe(filtered_df, use_container_width=True)
+            
+            # Add export functionality
+            if st.button("Export to Excel", key="export_ror"):
+                excel_data = download_excel(filtered_df, "ror_records.xlsx")
+                st.download_button(
+                    label="Download ROR Records",
+                    data=excel_data,
+                    file_name="ror_records.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
 def clean_value_for_excel(value):
     if isinstance(value, str):
@@ -843,7 +1209,7 @@ def user_management_ui():
                 region = st.selectbox(
                     "Region",
                     ["Select..."] + [f"Region {i}" for i in range(1, 7)],
-                    index=[f"Region {i}" for i in range(1, 7)].index(user_row["Region"]) + 1 if user_row["Region"] in [f"Region {i}" for i in range(1, 7)] else 0
+                    index=["Select..."] + [f"Region {i}" for i in range(1, 7)].index(user_row["Region"]) + 1 if user_row["Region"] in [f"Region {i}" for i in range(1, 7)] else 0
                 )
                 zone = None
             else:
@@ -1762,6 +2128,7 @@ def analytics_dashboard():
     if search_term:
         # Search across multiple fields
         filtered_df = filtered_df[
+            filtered_df['id'].astype(str).str.contains(search_term, case=False, na=False) |
             filtered_df['first_name'].str.contains(search_term, case=False, na=False) |
             filtered_df['surname'].str.contains(search_term, case=False, na=False) |
             filtered_df['title'].str.contains(search_term, case=False, na=False) |
@@ -1769,7 +2136,8 @@ def analytics_dashboard():
             filtered_df['record_data'].apply(lambda x: 
                 str(x.get('email', '')).lower().contains(search_term.lower()) or
                 str(x.get('church', '')).lower().contains(search_term.lower()) or
-                str(x.get('group', '')).lower().contains(search_term.lower())
+                str(x.get('group', '')).lower().contains(search_term.lower()) or
+                str(x.get('kingschat_phone', '')).lower().contains(search_term.lower())
             )
         ]
     
@@ -1797,7 +2165,7 @@ def analytics_dashboard():
     st.dataframe(filtered_df[display_columns], use_container_width=True)
 
 def view_partner_reports(is_admin=False, user_zone=None):
-    """View partner records reports with edit/delete for admin"""
+    """View partner records reports with financial edit for admin"""
     st.subheader("Partner Reports")
     
     # Display records in dataframe
@@ -1806,175 +2174,316 @@ def view_partner_reports(is_admin=False, user_zone=None):
         st.warning("No partner records found.")
         return
         
+    # Enhanced search functionality
+    search_term = st.text_input("Search by ID, Name, Title, Email, Church, Group, Zone, Phone", 
+                               key="admin_partner_search")
+    if search_term:
+        filtered_df = filtered_df[
+            filtered_df['id'].astype(str).str.contains(search_term, case=False, na=False) |
+            filtered_df['first_name'].str.contains(search_term, case=False, na=False) |
+            filtered_df['surname'].str.contains(search_term, case=False, na=False) |
+            filtered_df['title'].str.contains(search_term, case=False, na=False) |
+            filtered_df['zone'].str.contains(search_term, case=False, na=False) |
+            filtered_df['record_data'].apply(lambda x: 
+                str(x.get('email', '')).lower().contains(search_term.lower()) or
+                str(x.get('church', '')).lower().contains(search_term.lower()) or
+                str(x.get('group', '')).lower().contains(search_term.lower()) or
+                str(x.get('kingschat_phone', '')).lower().contains(search_term.lower())
+            )
+        ]
+    
     st.dataframe(filtered_df, use_container_width=True)
     
-    # Add edit/delete section for admin
+    # Add financial edit section for admin
     if is_admin:
-        st.subheader("Edit/Delete Records")
+        st.subheader("Edit Financial Records")
         
-        # Initialize session state for edit/delete confirmations
-        if 'partner_edit_mode' not in st.session_state:
-            st.session_state.partner_edit_mode = {}
-        if 'partner_delete_confirmations' not in st.session_state:
-            st.session_state.partner_delete_confirmations = {}
+        # Add search functionality for editing
+        edit_search_term = st.text_input(
+            "Search Record to Edit (ID, Name, Title, Email, Church, Group, Zone, Phone)",
+            key="admin_edit_search"
+        )
         
-        # Search by name or ID
-        search_term = st.text_input("Search by Name or ID", key="partner_report_search")
-        if search_term:
-            search_df = filtered_df[
-                filtered_df['first_name'].str.contains(search_term, case=False, na=False) |
-                filtered_df['surname'].str.contains(search_term, case=False, na=False) |
-                filtered_df['id'].astype(str).str.contains(search_term)
-            ]
+        edit_results_df = filtered_df
+        if edit_search_term:
+            edit_results_df = apply_partner_search(filtered_df, edit_search_term)
+        
+        if not edit_results_df.empty:
+            st.write("### Search Results")
+            for idx, row in edit_results_df.iterrows():
+                record_id = str(row['id'])
+                unique_id = get_unique_record_id(record_id, row['record_type'])
+                col1, col2 = st.columns([4, 1])
+                
+                with col1:
+                    st.write(f"""
+                    **ID:** {record_id} ({row['record_type']})  
+                    **Name:** {row['title']} {row['first_name']} {row['surname']}  
+                    **Zone:** {row['zone']}
+                    """)
+                
+                with col2:
+                    if st.button("Edit", key=f"admin_edit_btn_{unique_id}"):
+                        st.session_state.admin_editing_record = record_id
+                        st.session_state.admin_editing_type = row['record_type']
             
-            if not search_df.empty:
-                st.write("Search Results:")
-                for idx, row in search_df.iterrows():
-                    record_id = str(row['id'])
-                    col1, col2, col3 = st.columns([3, 1, 1])
+            # Show edit form if a record is selected
+            if hasattr(st.session_state, 'admin_editing_record'):
+                record = get_partner_record(
+                    st.session_state.admin_editing_record,
+                    st.session_state.admin_editing_type
+                )
+                
+                if record:
+                    unique_id = get_unique_record_id(
+                        st.session_state.admin_editing_record,
+                        st.session_state.admin_editing_type
+                    )
+                    with st.form(key=f"edit_form_{unique_id}"):
+                        st.write(f"""
+                        ### Edit Financial Records
+                        **Partner Type:** {st.session_state.admin_editing_type}  
+                        **Name:** {record.get('first_name')} {record.get('surname')}
+                        """)
+                        
+                        # Financial fields with unique keys
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            wonder_challenge = st.number_input(
+                                "Wonder Challenge", 
+                                value=float(record.get('total_wonder_challenge', 0)),
+                                key=f"wc_{unique_id}"
+                            )
+                            kiddies_products = st.number_input(
+                                "Kiddies Products", 
+                                value=float(record.get('total_kiddies_products', 0)),
+                                key=f"kp_{unique_id}"
+                            )
+                            braille_nolb = st.number_input(
+                                "Braille(NOLB)", 
+                                value=float(record.get('total_braille_nolb', 0)),
+                                key=f"bn_{unique_id}"
+                            )
+                            local_distribution = st.number_input(
+                                "Local Distribution", 
+                                value=float(record.get('total_local_distribution', 0)),
+                                key=f"ld_{unique_id}"
+                            )
+                        
+                        with col2:
+                            rhapsody_languages = st.number_input(
+                                "Rhapsody Languages", 
+                                value=float(record.get('total_rhapsody_languages', 0)),
+                                key=f"rl_{unique_id}"
+                            )
+                            teevo = st.number_input(
+                                "Teevo", 
+                                value=float(record.get('total_teevo', 0)),
+                                key=f"tv_{unique_id}"
+                            )
+                            youth_aglow = st.number_input(
+                                "Youth Aglow", 
+                                value=float(record.get('total_youth_aglow', 0)),
+                                key=f"ya_{unique_id}"
+                            )
+                            subscriptions_dubais = st.number_input(
+                                "Subscriptions/Dubais", 
+                                value=float(record.get('total_subscriptions_dubais', 0)),
+                                key=f"sd_{unique_id}"
+                            )
+                        
+                        submit = st.form_submit_button("Update Financial Records")
+                        
+                        if submit:
+                            updated_amounts = {
+                                'total_wonder_challenge': wonder_challenge,
+                                'total_rhapsody_languages': rhapsody_languages,
+                                'total_kiddies_products': kiddies_products,
+                                'total_teevo': teevo,
+                                'total_braille_nolb': braille_nolb,
+                                'total_youth_aglow': youth_aglow,
+                                'total_local_distribution': local_distribution,
+                                'total_subscriptions_dubais': subscriptions_dubais
+                            }
+                            
+                            success, message = edit_financial_record(
+                                st.session_state.admin_editing_record, 
+                                st.session_state.admin_editing_type,
+                                updated_amounts
+                            )
+                            
+                            if success:
+                                st.success(message)
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error(message)
+
+# Add this helper function to generate unique record identifier
+def get_unique_record_id(record_id, record_type):
+    """Generate a unique identifier combining record ID and type"""
+    type_prefix = {
+        'Adult Partner': 'AP',
+        'Child Partner': 'CP',
+        'Teenager Partner': 'TP',
+        'External Partner': 'EP'
+    }.get(record_type, 'XX')
+    return f"{type_prefix}_{record_id}"
+
+# Modify the search results display in view_reports_ui_readonly
+def view_reports_ui_readonly(user_zone):
+    """View reports interface for RZMs with financial edit capability"""
+    st.subheader("View Reports")
+    
+    # Display records in dataframe
+    filtered_df = get_filtered_partner_records(user_zone)
+    if filtered_df.empty:
+        st.warning("No partner records found.")
+        return
+    
+    # Enhanced search functionality
+    search_term = st.text_input("Search by ID, Name, Title, Email, Church, Group, Zone, Phone", 
+                               key="rzm_partner_search")
+    if search_term:
+        filtered_df = filtered_df[
+            filtered_df['id'].astype(str).str.contains(search_term, case=False, na=False) |
+            filtered_df['first_name'].str.contains(search_term, case=False, na=False) |
+            filtered_df['surname'].str.contains(search_term, case=False, na=False) |
+            filtered_df['title'].str.contains(search_term, case=False, na=False) |
+            filtered_df['zone'].str.contains(search_term, case=False, na=False) |
+            filtered_df['record_data'].apply(lambda x: 
+                str(x.get('email', '')).lower().contains(search_term.lower()) or
+                str(x.get('church', '')).lower().contains(search_term.lower()) or
+                str(x.get('group', '')).lower().contains(search_term.lower()) or
+                str(x.get('kingschat_phone', '')).lower().contains(search_term.lower())
+            )
+        ]
+    
+    st.dataframe(filtered_df, use_container_width=True)
+    
+    # Add financial edit section for RZMs
+    st.subheader("Edit Financial Records")
+    
+    # Add search functionality for editing
+    edit_search_term = st.text_input(
+        "Search Record to Edit (ID, Name, Title, Email, Church, Group, Zone, Phone)",
+        key="rzm_edit_search"
+    )
+    
+    edit_results_df = filtered_df
+    if edit_search_term:
+        edit_results_df = apply_partner_search(filtered_df, edit_search_term)
+    
+    if not edit_results_df.empty:
+        st.write("### Search Results")
+        for idx, row in edit_results_df.iterrows():
+            record_id = str(row['id'])
+            unique_id = get_unique_record_id(record_id, row['record_type'])
+            col1, col2 = st.columns([4, 1])
+            
+            with col1:
+                st.write(f"""
+                **ID:** {record_id} ({row['record_type']})  
+                **Name:** {row['title']} {row['first_name']} {row['surname']}  
+                **Zone:** {row['zone']}
+                """)
+            
+            with col2:
+                if st.button("Edit", key=f"edit_btn_{unique_id}"):
+                    st.session_state.editing_record = record_id
+                    st.session_state.editing_type = row['record_type']
+        
+        # Show edit form if a record is selected
+        if hasattr(st.session_state, 'editing_record'):
+            record = get_partner_record(
+                st.session_state.editing_record,
+                st.session_state.editing_type
+            )
+            
+            if record:
+                unique_id = get_unique_record_id(
+                    st.session_state.editing_record,
+                    st.session_state.editing_type
+                )
+                with st.form(key=f"edit_form_{unique_id}"):
+                    st.write(f"""
+                    ### Edit Financial Records
+                    **Partner Type:** {st.session_state.editing_type}  
+                    **Name:** {record.get('first_name')} {record.get('surname')}
+                    """)
                     
+                    # Financial fields with unique keys
+                    col1, col2 = st.columns(2)
                     with col1:
-                        st.write(f"{row['title']} {row['first_name']} {row['surname']} ({row['record_type']}) - ID: {record_id}")
+                        wonder_challenge = st.number_input(
+                            "Wonder Challenge", 
+                            value=float(record.get('total_wonder_challenge', 0)),
+                            key=f"wc_{unique_id}"
+                        )
+                        kiddies_products = st.number_input(
+                            "Kiddies Products", 
+                            value=float(record.get('total_kiddies_products', 0)),
+                            key=f"kp_{unique_id}"
+                        )
+                        braille_nolb = st.number_input(
+                            "Braille(NOLB)", 
+                            value=float(record.get('total_braille_nolb', 0)),
+                            key=f"bn_{unique_id}"
+                        )
+                        local_distribution = st.number_input(
+                            "Local Distribution", 
+                            value=float(record.get('total_local_distribution', 0)),
+                            key=f"ld_{unique_id}"
+                        )
                     
                     with col2:
-                        # Edit button
-                        if record_id not in st.session_state.partner_edit_mode:
-                            st.session_state.partner_edit_mode[record_id] = False
-                            
-                        if not st.session_state.partner_edit_mode[record_id]:
-                            if st.button("Edit", key=f"edit_partner_{record_id}"):
-                                st.session_state.partner_edit_mode[record_id] = True
-                                st.rerun()
+                        rhapsody_languages = st.number_input(
+                            "Rhapsody Languages", 
+                            value=float(record.get('total_rhapsody_languages', 0)),
+                            key=f"rl_{unique_id}"
+                        )
+                        teevo = st.number_input(
+                            "Teevo", 
+                            value=float(record.get('total_teevo', 0)),
+                            key=f"tv_{unique_id}"
+                        )
+                        youth_aglow = st.number_input(
+                            "Youth Aglow", 
+                            value=float(record.get('total_youth_aglow', 0)),
+                            key=f"ya_{unique_id}"
+                        )
+                        subscriptions_dubais = st.number_input(
+                            "Subscriptions/Dubais", 
+                            value=float(record.get('total_subscriptions_dubais', 0)),
+                            key=f"sd_{unique_id}"
+                        )
                     
-                    with col3:
-                        # Delete button
-                        if record_id not in st.session_state.partner_delete_confirmations:
-                            st.session_state.partner_delete_confirmations[record_id] = False
-                            
-                        if not st.session_state.partner_delete_confirmations[record_id]:
-                            if st.button("Delete", key=f"del_partner_{record_id}"):
-                                st.session_state.partner_delete_confirmations[record_id] = True
-                                st.rerun()
+                    submit = st.form_submit_button("Update Financial Records")
+                    
+                    if submit:
+                        updated_amounts = {
+                            'total_wonder_challenge': wonder_challenge,
+                            'total_rhapsody_languages': rhapsody_languages,
+                            'total_kiddies_products': kiddies_products,
+                            'total_teevo': teevo,
+                            'total_braille_nolb': braille_nolb,
+                            'total_youth_aglow': youth_aglow,
+                            'total_local_distribution': local_distribution,
+                            'total_subscriptions_dubais': subscriptions_dubais
+                        }
+                        
+                        success, message = edit_financial_record(
+                            st.session_state.editing_record, 
+                            st.session_state.editing_type,
+                            updated_amounts
+                        )
+                        
+                        if success:
+                            st.success(message)
+                            time.sleep(0.5)
+                            st.rerun()
                         else:
-                            col4, col5 = st.columns(2)
-                            with col4:
-                                if st.button("✓", key=f"confirm_partner_{record_id}", type="primary"):
-                                    success, message = delete_partner_record(record_id, row['record_type'])
-                                    if success:
-                                        st.success(message)
-                                        st.session_state.partner_delete_confirmations[record_id] = False
-                                        time.sleep(0.5)
-                                        st.rerun()
-                                    else:
-                                        st.error(message)
-                            with col5:
-                                if st.button("✗", key=f"cancel_partner_{record_id}"):
-                                    st.session_state.partner_delete_confirmations[record_id] = False
-                                    st.rerun()
-                    
-                    # Edit form
-                    if st.session_state.partner_edit_mode.get(record_id, False):
-                        with st.form(key=f"edit_partner_form_{record_id}"):
-                            st.write("### Edit Partner Record")
-                            
-                            # Fetch current record data
-                            current_data = get_partner_record(record_id, row['record_type'])
-                            if current_data:
-                                # Basic Info
-                                title = st.selectbox("Title", TITLE_OPTIONS, 
-                                    index=TITLE_OPTIONS.index(current_data.get('title', 'Bro')))
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    first_name = st.text_input("First Name", 
-                                        value=current_data.get('first_name', ''))
-                                with col2:
-                                    surname = st.text_input("Surname", 
-                                        value=current_data.get('surname', ''))
-                                
-                                # Contact Info
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    kingschat_phone = st.text_input("KingsChat Phone", 
-                                        value=current_data.get('kingschat_phone', ''))
-                                with col2:
-                                    email = st.text_input("Email", 
-                                        value=current_data.get('email', ''))
-                                
-                                # Church Info
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    church = st.text_input("Church", 
-                                        value=current_data.get('church', ''))
-                                with col2:
-                                    group_name = st.text_input("Group", 
-                                        value=current_data.get('group_name', ''))
-                                
-                                # Financial Info
-                                currency = st.selectbox("Currency", CURRENCIES,
-                                    index=CURRENCIES.index(current_data.get('currency', 'ESPEES')))
-                                
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    wonder_challenge = st.number_input("Wonder Challenge", 
-                                        value=float(current_data.get('total_wonder_challenge', 0)))
-                                    kiddies_products = st.number_input("Kiddies Products", 
-                                        value=float(current_data.get('total_kiddies_products', 0)))
-                                    braille_nolb = st.number_input("Braille(NOLB)", 
-                                        value=float(current_data.get('total_braille_nolb', 0)))
-                                    local_distribution = st.number_input("Local Distribution", 
-                                        value=float(current_data.get('total_local_distribution', 0)))
-                                with col2:
-                                    rhapsody_languages = st.number_input("Rhapsody Languages", 
-                                        value=float(current_data.get('total_rhapsody_languages', 0)))
-                                    teevo = st.number_input("Teevo", 
-                                        value=float(current_data.get('total_teevo', 0)))
-                                    youth_aglow = st.number_input("Youth Aglow", 
-                                        value=float(current_data.get('total_youth_aglow', 0)))
-                                    subscriptions_dubais = st.number_input("Subscriptions/Dubais", 
-                                        value=float(current_data.get('total_subscriptions_dubais', 0)))
-                                
-                                # Submit buttons
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    submit = st.form_submit_button("Update Record")
-                                with col2:
-                                    cancel = st.form_submit_button("Cancel")
-                                
-                                if submit:
-                                    # Prepare updated data
-                                    updated_data = {
-                                        'title': title,
-                                        'first_name': first_name,
-                                        'surname': surname,
-                                        'kingschat_phone': kingschat_phone,
-                                        'email': email,
-                                        'church': church,
-                                        'group_name': group_name,
-                                        'currency': currency,
-                                        'total_wonder_challenge': wonder_challenge,
-                                        'total_rhapsody_languages': rhapsody_languages,
-                                        'total_kiddies_products': kiddies_products,
-                                        'total_teevo': teevo,
-                                        'total_braille_nolb': braille_nolb,
-                                        'total_youth_aglow': youth_aglow,
-                                        'total_local_distribution': local_distribution,
-                                        'total_subscriptions_dubais': subscriptions_dubais
-                                    }
-                                    
-                                    success, message = update_partner_record(record_id, row['record_type'], updated_data)
-                                    if success:
-                                        st.success(message)
-                                        st.session_state.partner_edit_mode[record_id] = False
-                                        time.sleep(0.5)
-                                        st.rerun()
-                                    else:
-                                        st.error(message)
-                                
-                                if cancel:
-                                    st.session_state.partner_edit_mode[record_id] = False
-                                    st.rerun()
-            else:
-                st.info("No records found matching your search.")
+                            st.error(message)
 
 # Also add these helper functions for partner record operations
 def get_partner_record(record_id, record_type):
@@ -2060,6 +2569,59 @@ def update_partner_record(record_id, record_type, updated_data):
         return True, "Record updated successfully!"
     except Exception as e:
         return False, f"Error updating record: {e}"
+
+def edit_financial_record(record_id, record_type, updated_amounts):
+    """Edit financial amounts for a partner record"""
+    try:
+        conn = sqlite3.connect('partner_records.db')
+        c = conn.cursor()
+        
+        # Get the current record data
+        table_map = {
+            'Adult Partner': 'adult_partners',
+            'Child Partner': 'children_partners',
+            'Teenager Partner': 'teenager_partners',
+            'External Partner': 'external_partners'
+        }
+        
+        table_name = table_map.get(record_type)
+        if not table_name:
+            return False, "Invalid record type"
+            
+        c.execute(f"SELECT record_data FROM {table_name} WHERE id = ?", (record_id,))
+        record = c.fetchone()
+        
+        if not record:
+            return False, "Record not found"
+            
+        # Parse existing data
+        record_data = json.loads(record[0])
+        
+        # Update only financial fields
+        for field, value in updated_amounts.items():
+            record_data[field] = value
+        
+        # Recalculate totals
+        original_amount = sum(float(value) for value in updated_amounts.values())
+        grand_total = convert_to_espees(original_amount, record_data['currency'])
+        
+        # Update totals
+        record_data['original_amount'] = original_amount
+        record_data['grand_total'] = grand_total
+        
+        # Save updated record
+        record_json = json.dumps(record_data)
+        c.execute(f"""UPDATE {table_name} 
+                    SET record_data = ?, 
+                        submission_date = CURRENT_TIMESTAMP
+                    WHERE id = ?""",
+                 (record_json, record_id))
+        
+        conn.commit()
+        conn.close()
+        return True, "Financial records updated successfully!"
+    except Exception as e:
+        return False, f"Error updating financial records: {e}"
 
 if __name__ == "__main__":
     try:

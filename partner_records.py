@@ -8,7 +8,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import json
 
-# Add these constants at the top of the file
 TITLE_OPTIONS = ["Bro", "Sis", "Dcn", "Dcns", "Pastor", "Mr", "Mrs"]
 CHILD_TITLE_OPTIONS = ["Bro", "Sis"]
 
@@ -220,6 +219,36 @@ def fetch_partner_records(partner_type='all'):
 def partner_records_ui():
     st.subheader("Partner Records Management")
     
+    # Get user's zone if they are RZM
+    if st.session_state.user_group == "RZM":
+        user_details = get_user_details(st.session_state.username)
+        if user_details:
+            _, _, _, selected_zone = user_details
+            if selected_zone:
+                st.info(f"Adding records for: {selected_zone}")
+            else:
+                st.error("No zone assigned to your account")
+                return
+        else:
+            st.error("Could not retrieve user details")
+            return
+    elif st.session_state.is_super_admin:
+        # Load zones data for admin
+        with open('zones_data.json', 'r') as f:
+            zones_data = json.load(f)
+        
+        # First select region
+        regions = list(zones_data.keys())
+        selected_region = st.selectbox("Select Region", regions)
+        
+        # Then select zone from that region
+        if selected_region:
+            zones = zones_data[selected_region]
+            selected_zone = st.selectbox("Select Zone", zones)
+    else:
+        st.error("You don't have permission to add partner records")
+        return
+    
     # Create tabs for different sections
     tab1, tab2, tab3, tab4 = st.tabs(["Adult Partner", "Child Partner", "Teenager Partner", "External Partner"])
     
@@ -274,6 +303,7 @@ def partner_records_ui():
                     "group_name": group_name,
                     "kingschat_phone": kingschat_phone,
                     "email": email,
+                    "zone": selected_zone,  # Add the zone
                     "currency": currency,
                     "total_wonder_challenge": wonder_challenge,
                     "total_rhapsody_languages": rhapsody_languages,
@@ -682,3 +712,12 @@ def update_partner_record(record_id, record_type, updated_data):
         return True, "Record updated successfully!"
     except Exception as e:
         return False, f"Error updating record: {str(e)}"
+
+# Add this function at the top of the file
+def get_user_details(username):
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("SELECT user_group, sub_group, region, zone FROM users WHERE username=?", (username,))
+    user_details = c.fetchone()
+    conn.close()
+    return user_details
