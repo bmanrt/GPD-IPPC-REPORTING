@@ -6,20 +6,127 @@ import json
 import pandas as pd
 from datetime import datetime, timedelta
 import io
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-from openpyxl.styles import Font, Alignment, PatternFill
-from openpyxl.worksheet.table import Table, TableStyleInfo
-from openpyxl.worksheet.filters import FilterColumn, Filters
-from openpyxl.utils import get_column_letter
-from calendar import month_name
 import time
 import struct
 import re
+from partner_records import partner_records_ui, TITLE_OPTIONS, CURRENCIES
+from church_records import church_records_ui, fetch_church_partner_records, CONVERSION_RATES, set_display_currency, convert_to_espees
+from calendar import month_name
+from analytics import analytics_dashboard, fetch_all_partner_records
+from record_templates import record_templates_ui
+from partner_analytics import partner_analytics_ui
+from partner_reports import partner_reports_ui
+
+# Database initialization functions
+def init_partner_db():
+    """Initialize the partner records database without dropping existing tables"""
+    try:
+        conn = sqlite3.connect('partner_records.db')
+        c = conn.cursor()
+        
+        # Create tables if they don't exist (preserves existing data)
+        tables = {
+            'adult_partners': '''CREATE TABLE IF NOT EXISTS adult_partners
+                               (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                record_data TEXT NOT NULL,
+                                submission_date DATETIME NOT NULL)''',
+                                
+            'children_partners': '''CREATE TABLE IF NOT EXISTS children_partners
+                                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                   record_data TEXT NOT NULL,
+                                   submission_date DATETIME NOT NULL)''',
+                                   
+            'teenager_partners': '''CREATE TABLE IF NOT EXISTS teenager_partners
+                                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                   record_data TEXT NOT NULL,
+                                   submission_date DATETIME NOT NULL)''',
+                                   
+            'external_partners': '''CREATE TABLE IF NOT EXISTS external_partners
+                                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                   record_data TEXT NOT NULL,
+                                   submission_date DATETIME NOT NULL)'''
+        }
+        
+        # Create each table if it doesn't exist
+        for create_statement in tables.values():
+            c.execute(create_statement)
+        
+        # Add any necessary indices for performance
+        indices = [
+            'CREATE INDEX IF NOT EXISTS idx_adult_submission_date ON adult_partners(submission_date)',
+            'CREATE INDEX IF NOT EXISTS idx_children_submission_date ON children_partners(submission_date)',
+            'CREATE INDEX IF NOT EXISTS idx_teenager_submission_date ON teenager_partners(submission_date)',
+            'CREATE INDEX IF NOT EXISTS idx_external_submission_date ON external_partners(submission_date)'
+        ]
+        
+        for index in indices:
+            try:
+                c.execute(index)
+            except sqlite3.OperationalError as e:
+                if "already exists" not in str(e):
+                    raise e
+        
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error initializing partner database: {e}")
+    finally:
+        conn.close()
+
+def init_db():
+    try:
+        conn = sqlite3.connect('users.db')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS users
+                     (username TEXT PRIMARY KEY,
+                      password TEXT,
+                      full_name TEXT,
+                      email TEXT,
+                      user_group TEXT,
+                      sub_group TEXT,
+                      region TEXT,
+                      zone TEXT)''')
+        conn.commit()
+    except sqlite3.Error as e:
+        st.error(f"An error occurred while initializing the users database: {e}")
+    finally:
+        conn.close()
+
+    try:
+        conn = sqlite3.connect('reports.db')
+        c = conn.cursor()
+        # Create reports table if it doesn't exist
+        c.execute('''CREATE TABLE IF NOT EXISTS reports
+                     (id TEXT PRIMARY KEY,
+                      username TEXT,
+                      zone TEXT,
+                      year INTEGER,
+                      month INTEGER,
+                      report_data TEXT,
+                      submission_date DATETIME)''')
+        
+        # Create users table in reports.db if it doesn't exist
+        c.execute('''CREATE TABLE IF NOT EXISTS users
+                     (username TEXT PRIMARY KEY,
+                      full_name TEXT,
+                      email TEXT,
+                      user_group TEXT,
+                      sub_group TEXT,
+                      region TEXT,
+                      zone TEXT)''')
+        conn.commit()
+    except sqlite3.Error as e:
+        st.error(f"An error occurred while initializing the reports database: {e}")
+    finally:
+        conn.close()
+
+# Add this function to get record_templates_ui
+def get_record_templates_ui():
+    from record_templates import record_templates_ui
+    return record_templates_ui
 
 # Add these lines at the beginning of the script, after the imports
 st.set_page_config(
-    page_title="GPD ADMIN",
+    page_title="GPD Reporting",  # Changed from "GPD ADMIN"
     page_icon="🏢",
     layout="wide"
 )
@@ -32,38 +139,15 @@ if 'logged_in' not in st.session_state:
     st.session_state.is_regional_manager = False
 
 # Load zones data
-with open('zones_data.json', 'r') as f:
-    zones_data = json.load(f)
-
-# Updated Database setup
-def init_db():
-    try:
-        conn = sqlite3.connect('users.db')
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS users
-                     (username TEXT PRIMARY KEY, password TEXT, full_name TEXT, email TEXT, user_group TEXT, sub_group TEXT, region TEXT, zone TEXT)''')
-        conn.commit()
-    except sqlite3.Error as e:
-        st.error(f"An error occurred while initializing the users database: {e}")
-    finally:
-        conn.close()
-
-    try:
-        conn = sqlite3.connect('reports.db')
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS reports
-                     (id TEXT PRIMARY KEY,
-                      username TEXT,
-                      zone TEXT,
-                      year INTEGER,
-                      month INTEGER,
-                      report_data TEXT,
-                      submission_date DATETIME)''')
-        conn.commit()
-    except sqlite3.Error as e:
-        st.error(f"An error occurred while initializing the reports database: {e}")
-    finally:
-        conn.close()
+try:
+    with open('zones_data.json', 'r') as f:
+        zones_data = json.load(f)
+except FileNotFoundError:
+    st.error("zones_data.json file not found")
+    zones_data = {}
+except json.JSONDecodeError:
+    st.error("Invalid JSON in zones_data.json")
+    zones_data = {}
 
 # Hash password
 def hash_password(password):
@@ -94,6 +178,8 @@ def login_user(username, password):
         st.session_state.username = username
         st.session_state.is_super_admin = True
         st.session_state.is_regional_manager = False
+        st.session_state.user_group = "GPD"
+        st.session_state.sub_group = "Admin"
         return True
 
     conn = sqlite3.connect('users.db')
@@ -102,12 +188,15 @@ def login_user(username, password):
     c.execute("SELECT * FROM users WHERE username=? AND password=?", (username, hashed_password))
     user = c.fetchone()
     conn.close()
+    
     if user:
         st.session_state.logged_in = True
         st.session_state.username = username
         st.session_state.is_super_admin = False
-        st.session_state.is_regional_manager = user[5] == "Regional Manager"  # Assuming sub_group is at index 5
-        st.session_state.region = user[6]  # Assuming region is stored in the 7th column of the users table
+        st.session_state.is_regional_manager = user[5] == "Regional Manager"
+        st.session_state.region = user[6]
+        st.session_state.user_group = user[4]  # Assuming user_group is at index 4
+        st.session_state.sub_group = user[5]   # Assuming sub_group is at index 5
         return True
     return False
 
@@ -281,11 +370,38 @@ def check_existing_report(username, year, month):
     conn.close()
     return existing_report is not None
 
+# Add this function to load saved conversion rates
+def load_conversion_rates():
+    try:
+        with open('conversion_rates.json', 'r') as f:
+            rates = json.load(f)
+            # Update the CONVERSION_RATES in church_records
+            for currency, rate in rates.items():
+                CONVERSION_RATES[currency] = rate
+    except FileNotFoundError:
+        # If file doesn't exist, use default rates
+        pass
+    except Exception as e:
+        st.error(f"Error loading conversion rates: {e}")
+
 # Main app
 def main():
     try:
-        st.title("GPD ADMIN")
+        # Create two columns for title and logout button
+        col1, col2 = st.columns([0.85, 0.15])
+        with col1:
+            st.title("GPD Reporting")
+        
         if st.session_state.logged_in:
+            with col2:
+                if st.button("Logout", type="primary"):
+                    st.session_state.logged_in = False
+                    st.session_state.username = None
+                    st.session_state.is_super_admin = False
+                    st.session_state.is_regional_manager = False
+                    st.session_state.user_group = None
+                    st.session_state.sub_group = None
+                    st.rerun()
             display_dashboard()
         else:
             display_login_register()
@@ -339,222 +455,210 @@ def display_login_register():
 def display_dashboard():
     if st.session_state.is_super_admin:
         display_admin_dashboard()
-    elif st.session_state.is_regional_manager:
-        display_regional_manager_dashboard()
+    elif st.session_state.is_regional_manager or (
+        st.session_state.user_group == "GPD" and 
+        st.session_state.sub_group == "Reporting/Admin"
+    ):
+        display_full_access_dashboard()
     else:
         display_user_dashboard()
 
-    if st.button("Logout"):
-        st.session_state.logged_in = False
-        st.session_state.username = None
-        st.session_state.is_super_admin = False
-        st.session_state.is_regional_manager = False
-        st.rerun()
-
 def display_admin_dashboard():
-    try:
-        # Remove "GPD Admin Portal" from here
-        st.write("Welcome, Super Admin!")
-        st.subheader("Super Admin Dashboard")
+    st.title("Admin Dashboard")
+    
+    # Create tabs for different admin functions
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "User Management", 
+        "Record Templates", 
+        "View Reports",
+        "Partner Analytics",
+        "Church Analytics",
+        "ROR Analytics",  # Separate ROR Analytics tab
+        "Debug Database"
+    ])
+    
+    with tab1:
+        user_management_ui()
+    
+    with tab2:
+        record_templates_ui()
+    
+    with tab3:
+        view_reports_ui()
+        
+    with tab4:
+        partner_analytics_ui()
+        
+    with tab5:
+        church_analytics_ui()
+        
+    with tab6:
+        ror_analytics_ui()  # Added ROR Analytics UI
+        
+    with tab7:
+        debug_database_ui()
 
-        # Create tabs for different admin functions
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Dashboard", "User Management", "View Reports", "Manage Reports", "Edit Requests"])
-
-        with tab1:
-            st.subheader("Admin Dashboard")
+def debug_database_ui():
+    st.header("Database Management")
+    
+    # Create tabs for different database operations
+    debug_tab1, debug_tab2, debug_tab3 = st.tabs([
+        "View Records", 
+        "Database Schema",
+        "Database Operations"
+    ])
+    
+    with debug_tab1:
+        # ... existing view records code ...
+        pass
+        
+    with debug_tab2:
+        # ... existing schema code ...
+        pass
+        
+    with debug_tab3:
+        st.subheader("Database Operations")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("### Partner Records Database")
             
-            # User Statistics
-            users = fetch_all_users()
-            total_users = len(users)
-            st.write(f"Total Users: {total_users}")
-
-            # User breakdown by role
-            user_roles = pd.DataFrame(users, columns=["Username", "Full Name", "Email", "User Group", "Sub Group", "Region", "Zone"])
-            role_counts = user_roles['User Group'].value_counts().reset_index()
-            role_counts.columns = ['User Group', 'Count']
-            st.write("User Breakdown by Role:")
-            st.table(role_counts)
-
-            # User breakdown by GPD sub-groups
-            gpd_users = user_roles[user_roles['User Group'] == 'GPD']
-            gpd_subgroup_counts = gpd_users['Sub Group'].value_counts().reset_index()
-            gpd_subgroup_counts.columns = ['Sub Group', 'Count']
-            st.write("GPD Users Breakdown by Sub-group:")
-            st.table(gpd_subgroup_counts)
-
-            # User breakdown by RZM regions
-            rzm_users = user_roles[user_roles['User Group'] == 'RZM']
-            rzm_region_counts = rzm_users['Region'].value_counts().reset_index()
-            rzm_region_counts.columns = ['Region', 'Count']
-            st.write("RZM Users Breakdown by Region:")
-            st.table(rzm_region_counts)
-
-            # Report Statistics
-            reports = fetch_reports()
-            total_reports, metrics_sum = calculate_report_metrics(reports)
-            st.write(f"Total Reports Submitted: {total_reports}")
-            st.write("Metrics Summary:")
-            metrics_df = pd.DataFrame(list(metrics_sum.items()), columns=['Metric', 'Total'])
-            st.table(metrics_df)
-
-        with tab2:
-            # User Management Section
-            st.subheader("User Management")
-            users = fetch_all_users()
+            if st.button("Reinitialize Partner Records DB"):
+                try:
+                    # Remove existing database
+                    if os.path.exists('partner_records.db'):
+                        os.remove('partner_records.db')
+                    
+                    # Initialize fresh database
+                    from partner_records import init_partner_db
+                    init_partner_db()
+                    st.success("Partner Records database reinitialized successfully!")
+                except Exception as e:
+                    st.error(f"Error reinitializing Partner Records database: {e}")
             
-            # Display users in a table
-            user_df = pd.DataFrame(users, columns=["Username", "Full Name", "Email", "User Group", "Sub Group", "Region", "Zone"])
-            st.dataframe(user_df)
-
-            # User editing
-            st.subheader("Edit User")
-            selected_user = st.selectbox("Select a user to edit", [user[0] for user in users])
-            user_to_edit = next((user for user in users if user[0] == selected_user), None)
-
-            if user_to_edit:
-                with st.form("edit_user_form"):
-                    new_full_name = st.text_input("Full Name", value=user_to_edit[1])
-                    new_email = st.text_input("Email", value=user_to_edit[2])
-                    new_user_group = st.selectbox("User Group", ["GPD", "RZM"], index=["GPD", "RZM"].index(user_to_edit[3]))
+            if st.button("Run Partner Records Migration"):
+                try:
+                    # Read and execute migration SQL
+                    with open('migrations/add_grand_total_column.sql', 'r') as f:
+                        migration_sql = f.read()
                     
-                    new_sub_group = None
-                    new_region = None
-                    new_zone = None
-
-                    if new_user_group == "GPD":
-                        new_sub_group = st.selectbox("Sub Group", ["Finance", "IT", "Reporting/Admin", "Admin Manager", "Regional Manager"], index=["Finance", "IT", "Reporting/Admin", "Admin Manager", "Regional Manager"].index(user_to_edit[4] or "Finance"))
-                        if new_sub_group in ["Admin Manager", "Regional Manager"]:
-                            new_region = st.selectbox("Region", [f"Region {i}" for i in range(1, 7)], index=[f"Region {i}" for i in range(1, 7)].index(user_to_edit[5] or "Region 1"))
-                    elif new_user_group == "RZM":
-                        new_region = st.selectbox("Region", list(zones_data.keys()), index=list(zones_data.keys()).index(user_to_edit[5] or list(zones_data.keys())[0]))
-                        if new_region:
-                            new_zone = st.selectbox("Zone", zones_data[new_region], index=zones_data[new_region].index(user_to_edit[6] or zones_data[new_region][0]))
-
-                    if st.form_submit_button("Update User"):
-                        update_user(selected_user, new_full_name, new_email, new_user_group, new_sub_group, new_region, new_zone)
-                        st.success(f"User {selected_user} updated successfully!")
-                        st.rerun()
-
-            # User deletion
-            st.subheader("Delete User")
-            user_to_delete = st.selectbox("Select a user to delete", [user[0] for user in users])
-            if st.button("Delete User"):
-                delete_user(user_to_delete)
-                st.success(f"User {user_to_delete} deleted successfully!")
-                st.rerun()
-
-        with tab3:
-            # View Submitted Reports Section
-            st.subheader("View Submitted Reports")
-            reports = fetch_reports()
-            if reports:
-                report_df = pd.DataFrame(reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
-                
-                # View detailed report
-                view_report_details(report_df)
-
-                # Remove the individual download button
-                # Keep only the "Download All Reports as Excel" button, which is inside the view_report_details function
-            else:
-                st.write("No reports submitted yet.")
-
-        with tab4:
-            # Manage Submitted Reports Section
-            st.subheader("Manage Submitted Reports")
-            reports = fetch_reports()
-            if reports:
-                report_df = pd.DataFrame(reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
-                st.dataframe(report_df[["ID", "Username", "Zone", "Year", "Month", "Submission Date"]])
-
-                # Edit report
-                st.subheader("Edit Report")
-                report_id_to_edit = st.selectbox("Select a report to edit", report_df['ID'])
-                report_to_edit = report_df[report_df['ID'] == report_id_to_edit].iloc[0]
-                
-                with st.form("edit_report_form"):
-                    new_username = st.text_input("Username", value=report_to_edit['Username'], key=f"username_{report_id_to_edit}")
-                    new_zone = st.text_input("Zone", value=report_to_edit['Zone'], key=f"zone_{report_id_to_edit}")
+                    conn = sqlite3.connect('partner_records.db')
+                    c = conn.cursor()
                     
-                    # Handle potentially binary data for Year and Month
-                    try:
-                        year_value = int(report_to_edit['Year'])
-                    except (ValueError, TypeError):
-                        year_value = datetime.now().year  # Default to current year if conversion fails
+                    # Split and execute each statement
+                    for statement in migration_sql.split(';'):
+                        if statement.strip():
+                            try:
+                                c.execute(statement)
+                            except sqlite3.OperationalError as e:
+                                if "duplicate column" not in str(e).lower():
+                                    raise e
                     
-                    try:
-                        month_value = int(report_to_edit['Month'])
-                    except (ValueError, TypeError):
-                        month_value = 1  # Default to January if conversion fails
-                
-                    new_year = st.number_input("Year", min_value=2020, max_value=datetime.now().year, value=year_value, key=f"year_{report_id_to_edit}")
-                    new_month = st.selectbox("Month", range(1, 13), index=month_value-1, format_func=lambda x: datetime(2000, x, 1).strftime('%B'), key=f"month_{report_id_to_edit}")
+                    conn.commit()
+                    conn.close()
+                    st.success("Partner Records migration completed successfully!")
+                except Exception as e:
+                    st.error(f"Error running Partner Records migration: {e}")
+        
+        with col2:
+            st.write("### Church Records Database")
+            
+            if st.button("Reinitialize Church Records DB"):
+                try:
+                    # Remove existing database
+                    if os.path.exists('church_partners.db'):
+                        os.remove('church_partners.db')
                     
-                    report_data = json.loads(report_to_edit['Report Data'])
-                    new_report_data = {}
-                    for key, value in report_data.items():
+                    # Initialize fresh database
+                    from church_records import init_church_db
+                    init_church_db()
+                    st.success("Church Records database reinitialized successfully!")
+                except Exception as e:
+                    st.error(f"Error reinitializing Church Records database: {e}")
+            
+            if st.button("Run Church Records Migration"):
+                try:
+                    # Read and execute migration SQL
+                    with open('migrations/init_church_db.sql', 'r') as f:
+                        migration_sql = f.read()
+                    
+                    conn = sqlite3.connect('church_partners.db')
+                    c = conn.cursor()
+                    
+                    # Split and execute each statement
+                    for statement in migration_sql.split(';'):
+                        if statement.strip():
+                            try:
+                                c.execute(statement)
+                            except sqlite3.OperationalError as e:
+                                if "duplicate column" not in str(e).lower():
+                                    raise e
+                    
+                    conn.commit()
+                    conn.close()
+                    st.success("Church Records migration completed successfully!")
+                except Exception as e:
+                    st.error(f"Error running Church Records migration: {e}")
+        
+        # Add backup/restore functionality
+        st.write("### Backup and Restore")
+        
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            if st.button("Backup Databases"):
+                try:
+                    backup_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    
+                    # Backup partner records
+                    if os.path.exists('partner_records.db'):
+                        import shutil
+                        shutil.copy2('partner_records.db', f'backups/partner_records_{backup_time}.db')
+                    
+                    # Backup church records
+                    if os.path.exists('church_partners.db'):
+                        import shutil
+                        shutil.copy2('church_partners.db', f'backups/church_partners_{backup_time}.db')
+                    
+                    st.success(f"Databases backed up successfully! Timestamp: {backup_time}")
+                except Exception as e:
+                    st.error(f"Error backing up databases: {e}")
+        
+        with col4:
+            # List available backups
+            if os.path.exists('backups'):
+                backup_files = [f for f in os.listdir('backups') if f.endswith('.db')]
+                if backup_files:
+                    selected_backup = st.selectbox(
+                        "Select backup to restore",
+                        backup_files,
+                        format_func=lambda x: x.replace('.db', '').replace('_', ' ')
+                    )
+                    
+                    if st.button("Restore Selected Backup"):
                         try:
-                            new_report_data[key] = st.number_input(key, value=int(value), key=f"admin_edit_{report_id_to_edit}_{key}")
-                        except (ValueError, TypeError):
-                            st.error(f"Invalid value for {key}: {value}")
-                            new_report_data[key] = st.number_input(key, value=0, key=f"admin_edit_{report_id_to_edit}_{key}_error")
-
-                    if st.form_submit_button("Update Report"):
-                        update_report(report_id_to_edit, new_username, new_zone, new_year, new_month, new_report_data)
-                        st.success(f"Report {report_id_to_edit} updated successfully!")
-                        st.rerun()
-
-                # Delete report
-                st.subheader("Delete Report")
-                report_id_to_delete = st.selectbox("Select a report to delete", report_df['ID'])
-                if st.button("Delete Report"):
-                    delete_report(report_id_to_delete)
-                    st.success(f"Report {report_id_to_delete} deleted successfully!")
-                    st.rerun()
+                            import shutil
+                            backup_path = os.path.join('backups', selected_backup)
+                            
+                            # Determine which database to restore
+                            if 'partner_records' in selected_backup:
+                                shutil.copy2(backup_path, 'partner_records.db')
+                            elif 'church_partners' in selected_backup:
+                                shutil.copy2(backup_path, 'church_partners.db')
+                            
+                            st.success("Database restored successfully!")
+                        except Exception as e:
+                            st.error(f"Error restoring backup: {e}")
+                else:
+                    st.info("No backups available")
             else:
-                st.write("No reports submitted yet.")
-
-        with tab5:
-            st.subheader("Manage Edit Requests")
-            edit_requests = get_edit_requests()
-            if edit_requests:
-                for request in edit_requests:
-                    st.write(f"User: {request[1]}, Report ID: {request[2]}, Reason: {request[3]}")
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        if st.button(f"Approve {request[0]}"):
-                            expiry_days = st.number_input("Edit access duration (days)", min_value=1, max_value=30, value=7)
-                            expiry_date = datetime.now() + timedelta(days=expiry_days)
-                            update_edit_request(request[0], "Approved", expiry_date)
-                            st.success(f"Edit request {request[0]} approved for {expiry_days} days.")
-                            time.sleep(1)  # Give the user a moment to see the success message
-                            st.rerun()  # Reload the page
-                    with col2:
-                        if st.button(f"Reject {request[0]}"):
-                            update_edit_request(request[0], "Rejected")
-                            st.success(f"Edit request {request[0]} rejected.")
-                            time.sleep(1)  # Give the user a moment to see the success message
-                            st.rerun()  # Reload the page
-            else:
-                st.write("No pending edit requests.")
-    except Exception as e:
-        st.error(f"An error occurred while displaying the admin dashboard: {e}")
-
-# Add these new functions to handle report updates and deletions
-def update_report(report_id, username, zone, year, month, report_data):
-    conn = sqlite3.connect('reports.db')
-    c = conn.cursor()
-    report_json = json.dumps(report_data)
-    c.execute("""UPDATE reports SET username=?, zone=?, year=?, month=?, report_data=?, submission_date=?
-                 WHERE id=?""", (username, zone, year, month, report_json, datetime.now(), report_id))
-    conn.commit()
-    conn.close()
-
-def delete_report(report_id):
-    conn = sqlite3.connect('reports.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM reports WHERE id=?", (report_id,))
-    conn.commit()
-    conn.close()
+                if st.button("Create Backups Directory"):
+                    try:
+                        os.makedirs('backups')
+                        st.success("Backups directory created!")
+                    except Exception as e:
+                        st.error(f"Error creating backups directory: {e}")
 
 def display_user_dashboard():
     try:
@@ -565,137 +669,29 @@ def display_user_dashboard():
         user_group, sub_group, region, zone = user_details
 
         # Create tabs for different sections
-        if user_group == "GPD" and sub_group == "Reporting/Admin":
-            tab1, tab2, tab3, tab4 = st.tabs(["Dashboard", "View All RZM Reports", "View Your Submitted Reports", "Submit New Report"])
-        elif user_group == "RZM":
-            tab1, tab2, tab3, tab4, tab5 = st.tabs(["Dashboard", "View Your Submitted Reports", "Submit New Report", "Edit Reports", "Edit Requests"])
+        if user_group == "RZM":
+            tab1, tab2, tab3, tab4 = st.tabs([
+                "Dashboard", 
+                "Partner Records", 
+                "Church Records",
+                "Upload Report"
+            ])
         else:
             tab1, tab2, tab3 = st.tabs(["Dashboard", "View Your Submitted Reports", "Submit New Report"])
 
-        # Fetch user reports once and create report_df
-        user_reports = fetch_reports(st.session_state.username)
-        if user_reports:
-            report_df = pd.DataFrame(user_reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
-        else:
-            report_df = pd.DataFrame()
-
         with tab1:
             st.subheader("Your Dashboard")
-            user_reports = fetch_reports(st.session_state.username)
-            total_reports, metrics_sum = calculate_report_metrics(user_reports)
-            st.write(f"Total Reports Submitted: {total_reports}")
-
-            # Add filters
-            st.subheader("Filter Dashboard")
-            time_period_options = get_time_period_options()
-            filter_type = st.selectbox("Filter by Time Period", ['All Time', 'Annual', 'Quarterly', 'Half-Year', 'Monthly'], key="dashboard_filter_type")
-            
-            if filter_type != 'All Time':
-                filter_value = st.selectbox(f"Select {filter_type}", time_period_options[filter_type], key="dashboard_filter_value")
-
-                # Apply filters
-                filtered_reports = user_reports
-                if filter_type == 'Annual':
-                    filtered_reports = [r for r in user_reports if r[3] == int(filter_value)]
-                elif filter_type == 'Quarterly':
-                    year, quarter = filter_value.split()
-                    quarter_month_map = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
-                    filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in quarter_month_map[quarter]]
-                elif filter_type == 'Half-Year':
-                    year, half = filter_value.split()
-                    half_year_month_map = {'H1': [1, 2, 3, 4, 5, 6], 'H2': [7, 8, 9, 10, 11, 12]}
-                    filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] in half_year_month_map[half]]
-                elif filter_type == 'Monthly':
-                    year, month = filter_value.split()
-                    month_num = datetime.strptime(month, '%B').month
-                    filtered_reports = [r for r in user_reports if r[3] == int(year) and r[4] == month_num]
-
-                total_reports, metrics_sum = calculate_report_metrics(filtered_reports)
-                st.write(f"Filtered Reports: {total_reports}")
-
-            st.write("Metrics Summary:")
-            metrics_df = pd.DataFrame(list(metrics_sum.items()), columns=['Metric', 'Total'])
-            st.table(metrics_df)
-
-        if user_group == "GPD" and sub_group == "Reporting/Admin":
-            with tab2:
-                st.subheader("View All RZM Reports")
-                all_rzm_reports = fetch_reports()
-                if all_rzm_reports:
-                    all_rzm_report_df = pd.DataFrame(all_rzm_reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
-                    view_report_details(all_rzm_report_df)
-                else:
-                    st.write("No RZM reports submitted yet.")
-
-        with tab3:
-            st.subheader("Submit New Report")
-            if user_group == "GPD":
-                st.write("Reporting functionality for GPD users is coming soon!")
-            elif user_group == "RZM":
-                st.write(f"RZM: {st.session_state.username}")
-                st.write(f"Zone: {zone}")
-
-                year = st.selectbox("Year", range(datetime.now().year, 2020, -1))
-                month = st.selectbox("Month", range(1, 13), format_func=lambda x: datetime(2000, x, 1).strftime('%B'))
-
-                # Check if a report already exists for this year and month
-                existing_report = check_existing_report(st.session_state.username, year, month)
-                if existing_report:
-                    st.warning(f"A report for {month_name[month]} {year} has already been submitted. To make changes, please request edit access.")
-                
-                report_fields = [
-                    "Wonder Alerts", "SYTK Alerts", "RRM", "Total Distribution", "No of Souls Won",
-                    "No of Rhapsody Outreaches", "No of Rhapsody Cells", "No of New Churches",
-                    "No of New Partners Enlisted", "No of Lingual Cells", "No of Language Churches",
-                    "No of Languages Sponsored", "No of Distribution Centers", "No of Groups Who Have Selected 1M",
-                    "No of Groups Achieved 1M Copies", "No of Groups Achieved 500k Copies",
-                    "No of Groups Achieved 250k Copies", "No of Groups Achieved 100k Copies",
-                    "Prayer Programs", "Partner Programs", "No of External Ministers",
-                    "ISEED Daily Partners", "Language Ambassadors"
-                ]
-
-                report_data = {}
-                for field in report_fields:
-                    report_data[field] = st.number_input(field, min_value=0, value=0)
-
-                if st.button("Submit Report"):
-                    if existing_report:
-                        st.error("A report for this month already exists. To make changes, please request edit access.")
-                    else:
-                        success, message = save_report(st.session_state.username, zone, year, month, report_data)
-                        if success:
-                            st.success(message)
-                            time.sleep(1)  # Give the user a moment to see the success message
-                            st.rerun()
-                        else:
-                            st.error(message)
 
         if user_group == "RZM":
-            with tab4:
-                st.subheader("Edit Reports")
-                if not report_df.empty:
-                    report_to_edit = st.selectbox("Select a report to edit", report_df['ID'])
-                    
-                    if check_edit_permission(st.session_state.username, report_to_edit):
-                        # Allow editing
-                        edit_report(report_to_edit, report_df)
-                    else:
-                        st.warning("You don't have permission to edit this report. Please request edit access.")
-                else:
-                    st.write("You haven't submitted any reports yet.")
+            with tab2:
+                partner_records_ui()
 
-            with tab5:
-                st.subheader("Edit Requests")
-                if not report_df.empty:
-                    report_to_request = st.selectbox("Select a report to request edit access", report_df['ID'])
-                    reason = st.text_area("Reason for edit request")
-                    if st.button("Submit Edit Request"):
-                        request_edit_permission(st.session_state.username, report_to_request, reason)
-                        st.success("Edit request submitted successfully!")
-                        time.sleep(1)  # Give the user a moment to see the success message
-                        st.rerun()
-                else:
-                    st.write("You haven't submitted any reports yet. You can't request edits for non-existent reports.")
+            with tab3:
+                church_records_ui()
+                
+            with tab4:
+                record_templates_ui()
+
     except Exception as e:
         st.error(f"An error occurred while displaying the user dashboard: {e}")
 
@@ -714,229 +710,1363 @@ def download_excel(df, filename):
     processed_data = output.getvalue()
     return processed_data
 
-# Modify the "View Report Details" section in both admin and user dashboards
-def view_report_details(report_df):
-    st.subheader("View Report Details")
-
-    # Add search functionality
-    search_term = st.text_input("Search reports", "")
-    if search_term:
-        report_df = report_df[report_df.apply(lambda row: search_term.lower() in ' '.join(row.astype(str)).lower(), axis=1)]
-
-    # Add filters
-    filter_options = ['Annual', 'Half-Year', 'Quarterly', 'Monthly', 'Individual']
-    filter_type = st.selectbox("Select filter type", filter_options)
-
-    years = sorted(report_df['Year'].unique(), reverse=True)
-    selected_year = st.selectbox("Select Year", years)
-
-    filtered_df = report_df[report_df['Year'] == selected_year]
-
-    if filter_type == 'Half-Year':
-        half_year = st.selectbox("Select Half", ['H1', 'H2'])
-        if half_year == 'H1':
-            filtered_df = filtered_df[filtered_df['Month'].isin([1, 2, 3, 4, 5, 6])]
-        else:
-            filtered_df = filtered_df[filtered_df['Month'].isin([7, 8, 9, 10, 11, 12])]
-    elif filter_type == 'Quarterly':
-        quarter = st.selectbox("Select Quarter", ['Q1', 'Q2', 'Q3', 'Q4'])
-        quarter_months = {'Q1': [1, 2, 3], 'Q2': [4, 5, 6], 'Q3': [7, 8, 9], 'Q4': [10, 11, 12]}
-        filtered_df = filtered_df[filtered_df['Month'].isin(quarter_months[quarter])]
-    elif filter_type == 'Monthly':
-        month = st.selectbox("Select Month", range(1, 13), format_func=lambda x: month_name[x])
-        filtered_df = filtered_df[filtered_df['Month'] == month]
-    elif filter_type == 'Individual':
-        if 'Username' in filtered_df.columns:
-            usernames = sorted(filtered_df['Username'].unique())
-            selected_username = st.selectbox("Select RZM", usernames)
-            filtered_df = filtered_df[filtered_df['Username'] == selected_username]
-
-    if 'Zone' in filtered_df.columns:
-        zones = ['All'] + sorted(filtered_df['Zone'].unique())
-        selected_zone = st.selectbox("Select Zone", zones)
-        if selected_zone != 'All':
-            filtered_df = filtered_df[filtered_df['Zone'] == selected_zone]
-
-    if not filtered_df.empty:
-        report_ids = ['All'] + filtered_df['ID'].tolist()
-        selected_report_id = st.selectbox("Select a report to view details", report_ids)
-        
-        if st.button("View Report Details"):
-            if selected_report_id == 'All':
-                st.write("All Selected Reports")
-                st.write("---")
-                
-                total_reports = len(filtered_df)
-                st.write(f"Total Reports: {total_reports}")
-                
-                if 'Username' in filtered_df.columns:
-                    unique_rzms = filtered_df['Username'].nunique()
-                    st.write(f"Unique RZMs: {unique_rzms}")
-                
-                if 'Zone' in filtered_df.columns:
-                    unique_zones = filtered_df['Zone'].nunique()
-                    st.write(f"Unique Zones: {unique_zones}")
-                
-                st.write("---")
-                st.write("Report Data:")
-                
-                # Create a DataFrame for all report data
-                all_reports_data = []
-                for _, row in filtered_df.iterrows():
-                    report_data = json.loads(row['Report Data'])
-                    report_row = {
-                        "RZM Name": row['Username'],
-                        "Zone": row['Zone'],
-                        "Year": row['Year'],
-                        "Month": month_name[row['Month']]
-                    }
-                    report_row.update(report_data)
-                    all_reports_data.append(report_row)
-                
-                all_reports_df = pd.DataFrame(all_reports_data)
-                
-                # Display the DataFrame
-                st.dataframe(all_reports_df)
-                
-                # Add download button for all data
-                excel_data = download_excel(all_reports_df, "all_reports.xlsx")
-                st.download_button(
-                    label="Download All Reports as Excel",
-                    data=excel_data,
-                    file_name="all_reports.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-            else:
-                report = filtered_df[filtered_df['ID'] == selected_report_id].iloc[0]
-                report_data = json.loads(report['Report Data'])
-                
-                # Ensure all values in report_data are properly decoded
-                for key, value in report_data.items():
-                    if isinstance(value, bytes):
-                        try:
-                            report_data[key] = struct.unpack('q', value)[0]
-                        except struct.error:
-                            report_data[key] = value.decode('utf-8', errors='replace')
-                
-                st.write("GPD Admin Portal - Report Data")
-                st.write("---")
-                
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.write("RZM Name:")
-                    st.write("Zone:")
-                    st.write("Year:")
-                    st.write("Month:")
-                with col2:
-                    st.write(report['Username'])
-                    st.write(report['Zone'])
-                    try:
-                        year = int(report['Year'])
-                        month = int(report['Month'])
-                        st.write(year)
-                        st.write(month_name[month])
-                    except (ValueError, TypeError):
-                        st.write("Invalid Year/Month")
-                
-                st.write("---")
-                st.write("Report Data:")
-                
-                # Create a DataFrame for the report data
-                report_data_df = pd.DataFrame(list(report_data.items()), columns=['Metric', 'Value'])
-                st.table(report_data_df)
-    else:
-        st.write("No reports available for the selected filters.")
-
-# Add this new function to handle report editing
-def edit_report(report_id, report_df):
-    report = report_df[report_df['ID'] == report_id].iloc[0]
-    report_data = json.loads(report['Report Data'])
-    
-    # Extract year and month from the report ID or use the values from the report
+def delete_partner_record(record_id, record_type):
+    """Delete a partner record from the appropriate table"""
     try:
-        year, month, _ = report_id.split('-')
-        year = int(year)
-        month = int(month)
-    except ValueError:
-        try:
-            year = int(report['Year'])
-            month = int(report['Month'])
-        except (ValueError, TypeError):
-            st.error(f"Invalid year or month value: Year={report['Year']}, Month={report['Month']}")
-            return
-    
-    st.write(f"Editing report for {report['Zone']} - {month_name[month]} {year}")
-    
-    new_report_data = {}
-    for field, value in report_data.items():
-        try:
-            new_report_data[field] = st.number_input(field, value=int(value), key=f"edit_{report_id}_{field}")
-        except (ValueError, TypeError):
-            st.error(f"Invalid value for {field}: {value}")
-            new_report_data[field] = st.number_input(field, value=0, key=f"edit_{report_id}_{field}_error")
-    
-    if st.button("Save Changes", key=f"save_{report_id}"):
-        update_report(report_id, report['Username'], report['Zone'], year, month, new_report_data)
-        st.success("Report updated successfully!")
-        time.sleep(1)  # Give the user a moment to see the success message
-        st.rerun()
+        conn = sqlite3.connect('partner_records.db')
+        c = conn.cursor()
+        
+        table_name = {
+            'Adult Partner': 'adult_partners',
+            'Child Partner': 'children_partners',
+            'Teenager Partner': 'teenager_partners',
+            'External Partner': 'external_partners'
+        }[record_type]
+        
+        c.execute(f"DELETE FROM {table_name} WHERE id = ?", (record_id,))
+        conn.commit()
+        return True, "Record deleted successfully!"
+    except Exception as e:
+        return False, f"Error deleting record: {e}"
+    finally:
+        conn.close()
 
-# Add this new function to fetch RZMs in a specific region
-def fetch_rzms_in_region(region):
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute("SELECT username, full_name, email, zone FROM users WHERE user_group='RZM' AND region=?", (region,))
-    rzms = c.fetchall()
-    conn.close()
-    return rzms
+def delete_church_record(record_id):
+    """Delete a church record"""
+    try:
+        conn = sqlite3.connect('church_partners.db')
+        c = conn.cursor()
+        c.execute("DELETE FROM church_partner_records WHERE id = ?", (record_id,))
+        conn.commit()
+        return True, "Record deleted successfully!"
+    except Exception as e:
+        return False, f"Error deleting record: {e}"
+    finally:
+        conn.close()
 
-# Modify the Regional Manager dashboard
-def display_regional_manager_dashboard():
+# Add new function for full access dashboard
+def display_full_access_dashboard():
     try:
         st.write(f"Welcome, {st.session_state.username}!")
-        st.subheader("Regional Manager Dashboard")
-
-        # Get the regional manager's region
-        region = st.session_state.region
-
-        # Create tabs for Dashboard and View Reports
-        tab1, tab2 = st.tabs(["Dashboard", "View Reports"])
+        
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "Dashboard",
+            "Partner Records",
+            "Church Records",
+            "Upload Report"
+        ])
 
         with tab1:
-            st.subheader(f"Regional Dashboard for {region}")
-            
-            # Fetch the list of RZMs in the region
-            rzms_in_region = fetch_rzms_in_region(region)
-            st.write(f"RZMs in {region}:")
-            rzm_df = pd.DataFrame(rzms_in_region, columns=["Username", "Full Name", "Email", "Zone"])
-            st.dataframe(rzm_df)
+            st.subheader("Dashboard Overview")
+            # Add dashboard content specific to role
+            if st.session_state.is_regional_manager:
+                region = st.session_state.region
+                
+                # Fetch and display regional-specific statistics
+                rzms_in_region = fetch_rzms_in_region(region)
+                st.write(f"RZMs in {region}:")
+                rzm_df = pd.DataFrame(rzms_in_region, columns=["Username", "Full Name", "Email", "Zone"])
+                st.dataframe(rzm_df)
 
-            # Fetch and display regional-specific statistics and metrics
-            reports = fetch_reports(region=region)
-            if reports:
-                total_reports, metrics_sum = calculate_report_metrics(reports)
-                st.write(f"Total Reports Submitted in {region}: {total_reports}")
-                st.write("Metrics Summary:")
-                metrics_df = pd.DataFrame(list(metrics_sum.items()), columns=['Metric', 'Total'])
-                st.table(metrics_df)
+                # Display regional reports and metrics
+                reports = fetch_reports(region=region)
+                if reports:
+                    total_reports, metrics_sum = calculate_report_metrics(reports)
+                    st.write(f"Total Reports Submitted in {region}: {total_reports}")
+                    st.write("Metrics Summary:")
+                    metrics_df = pd.DataFrame(list(metrics_sum.items()), columns=['Metric', 'Total'])
+                    st.table(metrics_df)
             else:
-                st.write("No reports submitted yet in your region.")
+                # Display admin/reporting dashboard content
+                reports = fetch_reports()
+                if reports:
+                    total_reports, metrics_sum = calculate_report_metrics(reports)
+                    st.write(f"Total Reports Submitted: {total_reports}")
+                    st.write("Overall Metrics Summary:")
+                    metrics_df = pd.DataFrame(list(metrics_sum.items()), columns=['Metric', 'Total'])
+                    st.table(metrics_df)
 
         with tab2:
-            st.subheader("View Submitted Reports")
-            reports = fetch_reports(region=region)
-            if reports:
-                report_df = pd.DataFrame(reports, columns=["ID", "Username", "Zone", "Year", "Month", "Report Data", "Submission Date"])
-                # View detailed report
-                view_report_details(report_df)
-            else:
-                st.write("No reports submitted yet in your region.")
+            partner_records_ui()
+
+        with tab3:
+            church_records_ui()
+
+        with tab4:
+            record_templates_ui()  # Use the imported function directly
+
     except Exception as e:
-        st.error(f"An error occurred while displaying the regional manager dashboard: {e}")
+        st.error(f"An error occurred while displaying the dashboard: {e}")
+
+# Add this after the other function definitions and before the main() function
+
+def user_management_ui():
+    st.subheader("User Management")
+    
+    # Fetch all users
+    users = fetch_all_users()
+    
+    # Create DataFrame for better display
+    users_df = pd.DataFrame(users, columns=[
+        "Username", "Full Name", "Email", "User Group", 
+        "Sub Group", "Region", "Zone"
+    ])
+    
+    # Display users table
+    st.write("### Current Users")
+    st.dataframe(users_df)
+    
+    # Edit User Section
+    st.write("### Edit User")
+    username_to_edit = st.selectbox("Select user to edit", users_df["Username"])
+    
+    if username_to_edit:
+        user_row = users_df[users_df["Username"] == username_to_edit].iloc[0]
+        
+        # Create form for editing
+        with st.form("edit_user_form"):
+            full_name = st.text_input("Full Name", value=user_row["Full Name"])
+            email = st.text_input("Email", value=user_row["Email"])
+            user_group = st.selectbox(
+                "User Group", 
+                ["GPD", "RZM"],
+                index=0 if user_row["User Group"] == "GPD" else 1
+            )
+            
+            # Dynamic fields based on user group
+            if user_group == "GPD":
+                sub_group = st.selectbox(
+                    "Sub Group",
+                    ["Finance", "IT", "Reporting/Admin", "Admin Manager", "Regional Manager"],
+                    index=["Finance", "IT", "Reporting/Admin", "Admin Manager", "Regional Manager"].index(user_row["Sub Group"]) if user_row["Sub Group"] in ["Finance", "IT", "Reporting/Admin", "Admin Manager", "Regional Manager"] else 0
+                )
+                region = st.selectbox(
+                    "Region",
+                    ["Select..."] + [f"Region {i}" for i in range(1, 7)],
+                    index=[f"Region {i}" for i in range(1, 7)].index(user_row["Region"]) + 1 if user_row["Region"] in [f"Region {i}" for i in range(1, 7)] else 0
+                )
+                zone = None
+            else:
+                sub_group = None
+                region = st.selectbox(
+                    "Region",
+                    ["Select..."] + list(zones_data.keys()),
+                    index=list(zones_data.keys()).index(user_row["Region"]) + 1 if user_row["Region"] in zones_data.keys() else 0
+                )
+                if region and region != "Select...":
+                    zone = st.selectbox(
+                        "Zone",
+                        ["Select..."] + zones_data[region],
+                        index=zones_data[region].index(user_row["Zone"]) + 1 if user_row["Zone"] in zones_data[region] else 0
+                    )
+            
+            submit = st.form_submit_button("Update User")
+            
+            if submit:
+                if user_group == "RZM" and (region == "Select..." or zone == "Select..."):
+                    st.error("Please select both Region and Zone for RZM users.")
+                elif user_group == "GPD" and (sub_group == "Select..." or (sub_group in ["Admin Manager", "Regional Manager"] and region == "Select...")):
+                    st.error("Please select all required fields for GPD users.")
+                else:
+                    update_user(username_to_edit, full_name, email, user_group, sub_group, region, zone)
+                    st.success("User updated successfully!")
+                    st.rerun()
+    
+    # Delete User Section
+    st.write("### Delete User")
+    username_to_delete = st.selectbox("Select user to delete", users_df["Username"], key="delete_user")
+    
+    if username_to_delete:
+        if st.button("Delete User"):
+            if username_to_delete == "admin":
+                st.error("Cannot delete admin user!")
+            else:
+                delete_user(username_to_delete)
+                st.success(f"User {username_to_delete} deleted successfully!")
+                st.rerun()
+
+def view_reports_ui():
+    """View reports interface with separate tabs for different record types"""
+    st.subheader("View Reports")
+    
+    # Create tabs for different types of reports (removed duplicate Partner Reports tab)
+    tab1, tab2, tab3 = st.tabs([
+        "Partner Reports",
+        "Church Sponsorship Reports", 
+        "ROR Outreaches Reports"
+    ])
+    
+    # Only show edit/delete for admin users
+    is_admin = st.session_state.is_super_admin
+    
+    # Get user's zone for filtering
+    user_zone = None
+    if not st.session_state.is_super_admin:
+        user_zone = st.session_state.get('zone')
+    
+    with tab1:
+        partner_reports_ui()
+        
+    with tab2:
+        view_church_sponsorship_reports(is_admin=is_admin, user_zone=user_zone)
+        
+    with tab3:
+        view_ror_reports(is_admin=is_admin, user_zone=user_zone)
+
+def view_church_sponsorship_reports(is_admin=False, user_zone=None):
+    """View church sponsorship records reports with edit/delete for admin"""
+    st.subheader("Church Sponsorship Reports")
+    
+    # Display records in dataframe
+    filtered_df = get_filtered_church_records(user_zone)
+    if filtered_df.empty:
+        st.warning("No church sponsorship records found.")
+        return
+        
+    st.dataframe(filtered_df, use_container_width=True)
+    
+    # Add edit/delete section for admin
+    if is_admin:
+        st.subheader("Edit/Delete Records")
+        
+        # Initialize session state for delete confirmations
+        if 'delete_confirmations' not in st.session_state:
+            st.session_state.delete_confirmations = {}
+        
+        # Search across multiple fields
+        search_term = st.text_input("Search by Church Name, Cell Name, Pastor, Leader, Group, or ID", key="church_search")
+        if search_term:
+            search_df = filtered_df[
+                filtered_df['Church Name'].str.contains(search_term, case=False, na=False) |
+                filtered_df['Cell Name'].str.contains(search_term, case=False, na=False) |
+                filtered_df['Church Pastor'].str.contains(search_term, case=False, na=False) |
+                filtered_df['Cell Leader'].str.contains(search_term, case=False, na=False) |
+                filtered_df['Group'].str.contains(search_term, case=False, na=False) |
+                filtered_df['ID'].astype(str).str.contains(search_term)
+            ]
+            
+            if not search_df.empty:
+                st.write("Search Results:")
+                for idx, row in search_df.iterrows():
+                    record_id = str(row['ID'])
+                    col1, col2 = st.columns([4, 1])
+                    
+                    with col1:
+                        # Display more comprehensive information
+                        display_name = row['Church Name'] or row['Cell Name']
+                        display_leader = row['Church Pastor'] or row['Cell Leader']
+                        st.write(f"{display_name} ({display_leader}) - Group: {row['Group']} (ID: {record_id})")
+                    
+                    with col2:
+                        if record_id not in st.session_state.delete_confirmations:
+                            st.session_state.delete_confirmations[record_id] = False
+                            
+                        if not st.session_state.delete_confirmations[record_id]:
+                            if st.button("Delete", key=f"del_{record_id}"):
+                                st.session_state.delete_confirmations[record_id] = True
+                                st.rerun()
+                        else:
+                            col3, col4 = st.columns(2)
+                            with col3:
+                                if st.button("✓", key=f"confirm_{record_id}", type="primary"):
+                                    success, message = delete_church_record(record_id)
+                                    if success:
+                                        st.success(message)
+                                        st.session_state.delete_confirmations[record_id] = False
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    else:
+                                        st.error(message)
+                            with col4:
+                                if st.button("✗", key=f"cancel_{record_id}"):
+                                    st.session_state.delete_confirmations[record_id] = False
+                                    st.rerun()
+            else:
+                st.info("No records found matching your search.")
+
+def view_ror_reports(is_admin=False, user_zone=None):
+    """View ROR outreach records reports with edit/delete for admin"""
+    st.subheader("ROR Outreaches Reports")
+    
+    # Display records in dataframe
+    filtered_df = get_filtered_ror_records(user_zone)
+    if filtered_df.empty:
+        st.warning("No ROR outreach records found.")
+        return
+        
+    st.dataframe(filtered_df, use_container_width=True)
+    
+    # Add edit/delete section for admin
+    if is_admin:
+        st.subheader("Edit/Delete Records")
+        
+        # Initialize session state for edit/delete confirmations
+        if 'edit_mode' not in st.session_state:
+            st.session_state.edit_mode = {}
+        if 'delete_confirmations' not in st.session_state:
+            st.session_state.delete_confirmations = {}
+        
+        # Search by group name or ID
+        search_term = st.text_input("Search by Group Name or ID", key="ror_report_search")
+        if search_term:
+            search_df = filtered_df[
+                filtered_df['Group'].str.contains(search_term, case=False, na=False) |
+                filtered_df['ID'].astype(str).str.contains(search_term)
+            ]
+            
+            if not search_df.empty:
+                st.write("Search Results:")
+                for idx, row in search_df.iterrows():
+                    record_id = str(row['ID'])
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    with col1:
+                        st.write(f"{row['Group']} (ID: {record_id})")
+                    
+                    with col2:
+                        # Edit button
+                        if record_id not in st.session_state.edit_mode:
+                            st.session_state.edit_mode[record_id] = False
+                            
+                        if not st.session_state.edit_mode[record_id]:
+                            if st.button("Edit", key=f"edit_{record_id}"):
+                                st.session_state.edit_mode[record_id] = True
+                                st.rerun()
+                    
+                    with col3:
+                        # Delete button
+                        if record_id not in st.session_state.delete_confirmations:
+                            st.session_state.delete_confirmations[record_id] = False
+                            
+                        if not st.session_state.delete_confirmations[record_id]:
+                            if st.button("Delete", key=f"del_{record_id}"):
+                                st.session_state.delete_confirmations[record_id] = True
+                                st.rerun()
+                        else:
+                            col4, col5 = st.columns(2)
+                            with col4:
+                                if st.button("✓", key=f"confirm_{record_id}", type="primary"):
+                                    success, message = delete_church_record(record_id)
+                                    if success:
+                                        st.success(message)
+                                        st.session_state.delete_confirmations[record_id] = False
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    else:
+                                        st.error(message)
+                            with col5:
+                                if st.button("✗", key=f"cancel_{record_id}"):
+                                    st.session_state.delete_confirmations[record_id] = False
+                                    st.rerun()
+                    
+                    # Edit form
+                    if st.session_state.edit_mode.get(record_id, False):
+                        with st.form(key=f"edit_form_{record_id}"):
+                            st.write("### Edit ROR Record")
+                            
+                            # Fetch current record data
+                            current_data = get_ror_record(record_id)
+                            if current_data:
+                                # Form fields
+                                group_name = st.text_input("Group Name", value=current_data.get('group_name', ''))
+                                zone_name = st.text_input("Zone", value=current_data.get('zone_name', ''))
+                                total_outreaches = st.number_input("Total Outreaches", 
+                                    value=int(current_data.get('total_outreaches', 0)), min_value=0)
+                                
+                                # Program quantities
+                                st.write("#### Program Quantities")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    reachout_programs = st.number_input("Reachout Programs", 
+                                        value=int(current_data.get('reachout_world_programs', 0)), min_value=0)
+                                    rhapathon = st.number_input("Rhapathon", 
+                                        value=int(current_data.get('rhapathon', 0)), min_value=0)
+                                    world_nations = st.number_input("World Nations", 
+                                        value=int(current_data.get('reachout_world_nations', 0)), min_value=0)
+                                    say_yes_to_kids = st.number_input("Say Yes to Kids", 
+                                        value=int(current_data.get('say_yes_to_kids', 0)), min_value=0)
+                                    teevolution = st.number_input("Teevolution", 
+                                        value=int(current_data.get('teevolution', 0)), min_value=0)
+                                
+                                with col2:
+                                    youth_aglow = st.number_input("Youth Aglow", 
+                                        value=int(current_data.get('youth_aglow', 0)), min_value=0)
+                                    no_one_left_behind = st.number_input("No One Left Behind", 
+                                        value=int(current_data.get('no_one_left_behind', 0)), min_value=0)
+                                    penetrating_truth = st.number_input("Penetrating Truth", 
+                                        value=int(current_data.get('penetrating_truth', 0)), min_value=0)
+                                    penetrating_languages = st.number_input("Penetrating Languages", 
+                                        value=int(current_data.get('penetrating_languages', 0)), min_value=0)
+                                    adopt_a_street = st.number_input("Adopt a Street", 
+                                        value=int(current_data.get('adopt_a_street', 0)), min_value=0)
+                                
+                                # Amount section
+                                st.write("#### Amount")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    total_amount = st.number_input("Total Amount", 
+                                        value=float(current_data.get('total_amount', 0.0)), min_value=0.0)
+                                with col2:
+                                    currency = st.selectbox("Currency", 
+                                        options=list(CONVERSION_RATES.keys()),
+                                        index=list(CONVERSION_RATES.keys()).index(current_data.get('currency', 'ESPEES')))
+                                
+                                # Calculate grand total
+                                grand_total = convert_to_espees(total_amount, currency)
+                                st.write(f"Grand Total: {grand_total:,.2f} ESPEES")
+                                
+                                # Submit buttons
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    submit = st.form_submit_button("Update Record")
+                                with col2:
+                                    cancel = st.form_submit_button("Cancel")
+                                
+                                if submit:
+                                    # Prepare updated data
+                                    updated_data = {
+                                        'group_name': group_name,
+                                        'zone_name': zone_name,
+                                        'total_outreaches': total_outreaches,
+                                        'reachout_world_programs': reachout_programs,
+                                        'rhapathon': rhapathon,
+                                        'reachout_world_nations': world_nations,
+                                        'say_yes_to_kids': say_yes_to_kids,
+                                        'teevolution': teevolution,
+                                        'youth_aglow': youth_aglow,
+                                        'no_one_left_behind': no_one_left_behind,
+                                        'penetrating_truth': penetrating_truth,
+                                        'penetrating_languages': penetrating_languages,
+                                        'adopt_a_street': adopt_a_street,
+                                        'total_amount': total_amount,
+                                        'currency': currency,
+                                        'grand_total': grand_total
+                                    }
+                                    
+                                    success, message = update_ror_record(record_id, updated_data)
+                                    if success:
+                                        st.success(message)
+                                        st.session_state.edit_mode[record_id] = False
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    else:
+                                        st.error(message)
+                                
+                                if cancel:
+                                    st.session_state.edit_mode[record_id] = False
+                                    st.rerun()
+            else:
+                st.info("No records found matching your search.")
+
+def church_analytics_ui():
+    """Church analytics dashboard with fixed currency display"""
+    st.title("Church Records Analytics")
+    
+    # Use ESPEES as default currency
+    display_currency = 'ESPEES'
+    
+    # Fetch church records (excluding ROR)
+    records = fetch_church_partner_records()
+    church_records = [r for r in records if r[1] != "ROR"]
+    
+    if not church_records:
+        st.warning("No church sponsorship records found.")
+        return
+        
+    # Process records into DataFrame
+    df = process_church_records(church_records, display_currency)
+    
+    if df.empty:
+        st.warning("No records found after processing.")
+        return
+    
+    # Add filters in columns
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Record type filter
+        record_types = ['All'] + sorted(df['Record Type'].unique().tolist())
+        selected_type = st.selectbox(
+            "Filter by Record Type", 
+            record_types,
+            key="church_record_type"
+        )
+    
+    with col2:
+        # Zone filter
+        zones = ['All'] + sorted(df['Zone'].unique().tolist())
+        selected_zone = st.selectbox(
+            "Filter by Zone", 
+            zones,
+            key="church_zone"
+        )
+    
+    with col3:
+        # Analysis type selection
+        analysis_type = st.selectbox(
+            "Analysis Type",
+            ["Quantity", "Amount"],
+            key="church_analysis_type"
+        )
+    
+    # Add search filter with expanded functionality
+    search_term = st.text_input("Search (Church Name, Pastor, Cell, Leader, Group, Zone)", key="church_analytics_search")
+    
+    # Apply filters
+    filtered_df = df.copy()
+    if selected_type != 'All':
+        filtered_df = filtered_df[filtered_df['Record Type'] == selected_type]
+    if selected_zone != 'All':
+        filtered_df = filtered_df[filtered_df['Zone'] == selected_zone]
+    if search_term:
+        # Search across multiple fields
+        filtered_df = filtered_df[
+            filtered_df['Church Name'].str.contains(search_term, case=False, na=False) |
+            filtered_df['Group'].str.contains(search_term, case=False, na=False) |
+            filtered_df['Zone'].str.contains(search_term, case=False, na=False) |
+            filtered_df.apply(lambda row: any(
+                str(val).lower().contains(search_term.lower())
+                for val in [
+                    row.get('Church Pastor', ''),
+                    row.get('Cell Name', ''),
+                    row.get('Cell Leader', '')
+                ]
+            ), axis=1)
+        ]
+    
+    # Prepare display columns based on analysis type
+    if analysis_type == "Quantity":
+        display_columns = [
+            'Record Type', 'Zone', 'Church Name', 'Group',
+            'Kiddies Products', 'Teevo', 'Braille',
+            'Languages', 'Youth Aglow', 'Total Quantity',
+            'Submission Date'
+        ]
+    else:  # Amount
+        filtered_df['Display Amount'] = filtered_df.apply(
+            lambda row: f"{row['Original Amount']:,.2f} {row['Currency']} "
+                       f"({row['Converted Amount']:,.2f} {display_currency})",
+            axis=1
+        )
+        display_columns = [
+            'Record Type', 'Zone', 'Church Name', 'Group',
+            'Display Amount', 'Total Quantity', 'Submission Date'
+        ]
+    
+    # Display filtered results
+    st.subheader("Filtered Results")
+    st.dataframe(filtered_df[display_columns], use_container_width=True)
+
+def ror_analytics_ui():
+    """Dedicated ROR Analytics Interface"""
+    st.title("ROR Outreaches Analytics")
+    
+    # Use ESPEES as default currency
+    display_currency = 'ESPEES'
+    
+    # Fetch ROR records
+    conn = sqlite3.connect('church_partners.db')
+    query = "SELECT * FROM church_partner_records WHERE record_type = 'ROR'"
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        st.warning("No ROR outreach records found.")
+        return
+    
+    # Process records
+    records_data = []
+    for _, row in df.iterrows():
+        record_data = json.loads(row['record_data'])
+        
+        # Extract base data
+        base_data = {
+            'Zone': record_data.get('zone_name', ''),
+            'Group': record_data.get('group_name', ''),
+            'Total Outreaches': int(record_data.get('total_outreaches', 0)),
+            'Original Amount': float(record_data.get('total_amount', 0)),
+            'Currency': record_data.get('currency', 'ESPEES'),
+            'Submission Date': row['submission_date'],
+            # Program-specific data
+            'Reachout Programs': int(record_data.get('reachout_world_programs', 0)),
+            'Rhapathon': int(record_data.get('rhapathon', 0)),
+            'World Nations': int(record_data.get('reachout_world_nations', 0)),
+            'Say Yes to Kids': int(record_data.get('say_yes_to_kids', 0)),
+            'Teevolution': int(record_data.get('teevolution', 0)),
+            'Youth Aglow': int(record_data.get('youth_aglow', 0)),
+            'No One Left Behind': int(record_data.get('no_one_left_behind', 0)),
+            'Penetrating Truth': int(record_data.get('penetrating_truth', 0)),
+            'Penetrating Languages': int(record_data.get('penetrating_languages', 0)),
+            'Adopt a Street': int(record_data.get('adopt_a_street', 0))
+        }
+        
+        # Convert amount to ESPEES
+        base_data['Converted Amount'] = convert_to_espees(
+            base_data['Original Amount'],
+            base_data['Currency']
+        )
+        
+        # Add formatted amount display
+        base_data['Amount'] = (
+            f"{base_data['Original Amount']:,.2f} {base_data['Currency']} "
+            f"({base_data['Converted Amount']:,.2f} {display_currency})"
+        )
+        
+        records_data.append(base_data)
+    
+    df = pd.DataFrame(records_data)
+    
+    # Add filters
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Zone filter
+        zones = ['All'] + sorted(df['Zone'].unique().tolist())
+        selected_zone = st.selectbox(
+            "Filter by Zone", 
+            zones,
+            key="ror_analytics_zone"
+        )
+    
+    with col2:
+        # View type selection
+        view_type = st.selectbox(
+            "Select Program",
+            [
+                "All Programs",
+                "Reachout Programs",
+                "Rhapathon",
+                "World Nations",
+                "Say Yes to Kids",
+                "Teevolution",
+                "Youth Aglow",
+                "No One Left Behind",
+                "Penetrating Truth",
+                "Penetrating Languages",
+                "Adopt a Street"
+            ],
+            key="ror_view_type"
+        )
+    
+    with col3:
+        # Analysis type
+        analysis_type = st.selectbox(
+            "Analysis Type",
+            ["Quantity", "Amount"],
+            key="ror_analysis_type"
+        )
+    
+    # Add search filter with expanded functionality
+    search_term = st.text_input("Search (Group Name, Zone, Programs)", key="ror_analytics_search")
+    
+    # Apply filters
+    filtered_df = df.copy()
+    if selected_zone != 'All':
+        filtered_df = filtered_df[filtered_df['Zone'] == selected_zone]
+    if search_term:
+        # Search across multiple fields
+        program_columns = [
+            'Reachout Programs', 'Rhapathon', 'World Nations',
+            'Say Yes to Kids', 'Teevolution', 'Youth Aglow',
+            'No One Left Behind', 'Penetrating Truth',
+            'Penetrating Languages', 'Adopt a Street'
+        ]
+        
+        filtered_df = filtered_df[
+            filtered_df['Group'].str.contains(search_term, case=False, na=False) |
+            filtered_df['Zone'].str.contains(search_term, case=False, na=False) |
+            # Search in program names
+            filtered_df[program_columns].apply(
+                lambda row: any(
+                    col.lower().contains(search_term.lower())
+                    for col in program_columns
+                ), axis=1
+            )
+        ]
+    
+    # Prepare display columns based on view and analysis type
+    if view_type == "All Programs":
+        if analysis_type == "Quantity":
+            display_columns = [
+                'Zone', 'Group',
+                'Reachout Programs', 'Rhapathon', 'World Nations',
+                'Say Yes to Kids', 'Teevolution', 'Youth Aglow',
+                'No One Left Behind', 'Penetrating Truth',
+                'Penetrating Languages', 'Adopt a Street',
+                'Total Outreaches'
+            ]
+        else:  # Amount
+            display_columns = ['Zone', 'Group', 'Amount', 'Total Outreaches']
+    else:
+        if analysis_type == "Quantity":
+            display_columns = ['Zone', 'Group', view_type, 'Total Outreaches']
+        else:  # Amount
+            display_columns = ['Zone', 'Group', view_type, 'Amount']
+    
+    # Add submission date to all views
+    display_columns.append('Submission Date')
+    
+    # Display filtered results
+    st.subheader("Filtered Results")
+    st.dataframe(filtered_df[display_columns], use_container_width=True)
+
+def process_church_records(records, display_currency):
+    """Process church records into DataFrame"""
+    records_data = []
+    for record in records:
+        record_id, record_type, record_data, submission_date = record
+        if isinstance(record_data, str):
+            record_data = json.loads(record_data)
+            
+        # Extract common fields
+        base_data = {
+            'ID': record_id,
+            'Record Type': record_type,
+            'Zone': record_data.get('zone_name', ''),
+            'Group': record_data.get('group_name', ''),
+            'Church Name': record_data.get('church_name', ''),
+            'Total Quantity': int(record_data.get('total_quantity', 0)),
+            'Original Amount': float(record_data.get('total_amount', 0)),
+            'Currency': record_data.get('currency', 'ESPEES'),
+            'Submission Date': submission_date
+        }
+        
+        # Add product quantities
+        base_data.update({
+            'Kiddies Products': int(record_data.get('kiddies_products', 0)),
+            'Teevo': int(record_data.get('teevo', 0)),
+            'Braille': int(record_data.get('braille_nolb', 0)),
+            'Languages': int(record_data.get('languages', 0)),
+            'Youth Aglow': int(record_data.get('youth_aglow', 0))
+        })
+        
+        # Convert amount to display currency
+        base_data['Converted Amount'] = convert_to_espees(
+            base_data['Original Amount'],
+            base_data['Currency']
+        )
+        
+        records_data.append(base_data)
+    
+    return pd.DataFrame(records_data)
+
+def filter_church_records(df, record_type, zone):
+    """Apply filters to church records DataFrame"""
+    filtered_df = df.copy()
+    
+    if record_type != 'All':
+        filtered_df = filtered_df[filtered_df['Record Type'] == record_type]
+    if zone != 'All':
+        filtered_df = filtered_df[filtered_df['Zone'] == zone]
+        
+    return filtered_df
+
+def display_quantity_analysis(df):
+    """Display quantity-based analysis"""
+    st.subheader("Quantity Analysis")
+    
+    # Select quantity metric
+    quantity_metrics = [
+        'Total Quantity',
+        'Kiddies Products',
+        'Teevo',
+        'Braille',
+        'Languages',
+        'Youth Aglow'
+    ]
+    
+    selected_metric = st.selectbox(
+        "Select Product Type",
+        quantity_metrics,
+        key="church_quantity_metric"
+    )
+    
+    # Display metrics
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Total Records", len(df))
+    
+    with col2:
+        total_qty = df[selected_metric].sum()
+        st.metric(f"Total {selected_metric}", f"{total_qty:,}")
+    
+    with col3:
+        avg_qty = total_qty / len(df) if len(df) > 0 else 0
+        st.metric(f"Average {selected_metric}", f"{avg_qty:,.0f}")
+    
+    # Display detailed records
+    st.subheader("Detailed Records")
+    display_columns = ['Record Type', 'Zone', 'Church Name', selected_metric, 'Submission Date']
+    st.dataframe(df[display_columns], use_container_width=True)
+
+def display_amount_analysis(df, currency):
+    """Display amount-based analysis"""
+    st.subheader("Amount Analysis")
+    
+    # Display metrics
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Total Records", len(df))
+    
+    with col2:
+        total_amount = df['Converted Amount'].sum()
+        st.metric(f"Total Amount ({currency})", f"{total_amount:,.2f}")
+    
+    with col3:
+        avg_amount = total_amount / len(df) if len(df) > 0 else 0
+        st.metric(f"Average Amount ({currency})", f"{avg_amount:,.2f}")
+    
+    # Display detailed records
+    st.subheader("Detailed Records")
+    df['Display Amount'] = df.apply(
+        lambda row: f"{row['Original Amount']:,.2f} {row['Currency']} "
+                   f"({row['Converted Amount']:,.2f} {currency})",
+        axis=1
+    )
+    
+    display_columns = ['Record Type', 'Zone', 'Church Name', 'Display Amount', 'Submission Date']
+    st.dataframe(df[display_columns], use_container_width=True)
+
+def get_filtered_partner_records(user_zone=None):
+    """Get filtered partner records"""
+    try:
+        # Fetch all partner records
+        conn = sqlite3.connect('partner_records.db')
+        
+        # Create a list to store DataFrames from different tables
+        dfs = []
+        
+        # Query each partner table
+        tables = {
+            'adult_partners': 'Adult Partner',
+            'children_partners': 'Child Partner',
+            'teenager_partners': 'Teenager Partner',
+            'external_partners': 'External Partner'
+        }
+        
+        for table, record_type in tables.items():
+            query = f"SELECT * FROM {table}"
+            df = pd.read_sql_query(query, conn)
+            if not df.empty:
+                # Parse record_data JSON
+                df['record_data'] = df['record_data'].apply(json.loads)
+                
+                # Extract fields from record_data
+                df['title'] = df['record_data'].apply(lambda x: x.get('title', ''))
+                df['first_name'] = df['record_data'].apply(lambda x: x.get('first_name', ''))
+                df['surname'] = df['record_data'].apply(lambda x: x.get('surname', ''))
+                df['zone'] = df['record_data'].apply(lambda x: x.get('zone', ''))
+                df['currency'] = df['record_data'].apply(lambda x: x.get('currency', 'ESPEES'))
+                df['original_amount'] = df['record_data'].apply(lambda x: float(x.get('total_amount', 0)))
+                df['grand_total'] = df['record_data'].apply(lambda x: float(x.get('grand_total', 0)))
+                df['record_type'] = record_type
+                
+                # Filter by user zone if specified
+                if user_zone:
+                    df = df[df['zone'] == user_zone]
+                
+                dfs.append(df)
+        
+        conn.close()
+        
+        # Combine all DataFrames
+        if dfs:
+            combined_df = pd.concat(dfs, ignore_index=True)
+            
+            # Format display columns
+            combined_df['Amount'] = combined_df.apply(
+                lambda row: f"{float(row['original_amount']):,.2f} {row['currency']} "
+                          f"({float(row['grand_total']):,.2f} ESPEES)",
+                axis=1
+            )
+            
+            # Select display columns
+            display_columns = [
+                'id', 'record_type', 'title', 'first_name', 'surname',
+                'zone', 'Amount', 'submission_date'
+            ]
+            
+            return combined_df[display_columns]
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error getting partner records: {e}")
+        return pd.DataFrame()
+
+def get_filtered_church_records(user_zone=None):
+    """Get filtered church records"""
+    try:
+        # Fetch church records (excluding ROR)
+        conn = sqlite3.connect('church_partners.db')
+        query = "SELECT * FROM church_partner_records WHERE record_type != 'ROR'"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        
+        if df.empty:
+            return pd.DataFrame()
+        
+        # Process records
+        records_data = []
+        for _, row in df.iterrows():
+            record_data = json.loads(row['record_data'])
+            
+            # Filter by user zone if specified
+            if user_zone and record_data.get('zone_name') != user_zone:
+                continue
+            
+            # Format record data
+            base_data = {
+                'ID': row['id'],
+                'Record Type': row['record_type'],
+                'Zone': record_data.get('zone_name', ''),
+                'Group': record_data.get('group_name', ''),
+                'Church Name': record_data.get('church_name', ''),
+                'Church Pastor': record_data.get('church_pastor', ''),
+                'Cell Name': record_data.get('cell_name', ''),
+                'Cell Leader': record_data.get('cell_leader', ''),
+                'Total Quantity': record_data.get('total_quantity', 0),
+                'Amount': f"{float(record_data.get('total_amount', 0)):,.2f} {record_data.get('currency', 'ESPEES')} "
+                         f"({float(record_data.get('grand_total', 0)):,.2f} ESPEES)",
+                'Submission Date': row['submission_date']
+            }
+            records_data.append(base_data)
+        
+        return pd.DataFrame(records_data)
+    except Exception as e:
+        st.error(f"Error getting church records: {e}")
+        return pd.DataFrame()
+
+def get_filtered_ror_records(user_zone=None):
+    """Get filtered ROR records"""
+    try:
+        # Fetch only ROR records
+        conn = sqlite3.connect('church_partners.db')
+        query = "SELECT * FROM church_partner_records WHERE record_type = 'ROR'"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        
+        if df.empty:
+            return pd.DataFrame()
+        
+        # Process records
+        records_data = []
+        for _, row in df.iterrows():
+            record_data = json.loads(row['record_data'])
+            
+            # Filter by user zone if specified
+            if user_zone and record_data.get('zone_name') != user_zone:
+                continue
+            
+            records_data.append({
+                'ID': row['id'],
+                'Zone': record_data.get('zone_name', ''),
+                'Group': record_data.get('group_name', ''),
+                'Total Outreaches': record_data.get('total_outreaches', 0),
+                'Amount': f"{float(record_data.get('total_amount', 0)):,.2f} {record_data.get('currency', 'ESPEES')} "
+                         f"({float(record_data.get('grand_total', 0)):,.2f} ESPEES)",
+                'Reachout Programs': record_data.get('reachout_world_programs', 0),
+                'Rhapathon': record_data.get('rhapathon', 0),
+                'World Nations': record_data.get('reachout_world_nations', 0),
+                'Say Yes to Kids': record_data.get('say_yes_to_kids', 0),
+                'Teevolution': record_data.get('teevolution', 0),
+                'Youth Aglow': record_data.get('youth_aglow', 0),
+                'No One Left Behind': record_data.get('no_one_left_behind', 0),
+                'Penetrating Truth': record_data.get('penetrating_truth', 0),
+                'Penetrating Languages': record_data.get('penetrating_languages', 0),
+                'Adopt a Street': record_data.get('adopt_a_street', 0),
+                'Submission Date': row['submission_date']
+            })
+        
+        return pd.DataFrame(records_data)
+    except Exception as e:
+        st.error(f"Error getting ROR records: {e}")
+        return pd.DataFrame()
+
+def fetch_church_partner_records():
+    """Fetch all church partner records including ROR"""
+    try:
+        conn = sqlite3.connect('church_partners.db')
+        c = conn.cursor()
+        c.execute("""SELECT id, record_type, record_data, submission_date 
+                    FROM church_partner_records""")
+        records = c.fetchall()
+        conn.close()
+        return records
+    except Exception as e:
+        st.error(f"Error fetching church partner records: {e}")
+        return []
+
+def analytics_dashboard():
+    """Partner analytics dashboard"""
+    st.title("Partner Analytics")
+    
+    # Use ESPEES as default currency
+    display_currency = 'ESPEES'
+    
+    # Fetch all partner records
+    df = fetch_all_partner_records()
+    
+    if df.empty:
+        st.warning("No partner records found.")
+        return
+    
+    # Extract fields from record_data
+    df['wonder_challenge'] = df['record_data'].apply(lambda x: float(x.get('total_wonder_challenge', 0)))
+    df['rhapsody_languages'] = df['record_data'].apply(lambda x: float(x.get('total_rhapsody_languages', 0)))
+    df['kiddies_products'] = df['record_data'].apply(lambda x: float(x.get('total_kiddies_products', 0)))
+    df['teevo'] = df['record_data'].apply(lambda x: float(x.get('total_teevo', 0)))
+    df['braille_nolb'] = df['record_data'].apply(lambda x: float(x.get('total_braille_nolb', 0)))
+    df['youth_aglow'] = df['record_data'].apply(lambda x: float(x.get('total_youth_aglow', 0)))
+    df['local_distribution'] = df['record_data'].apply(lambda x: float(x.get('total_local_distribution', 0)))
+    df['subscriptions_dubais'] = df['record_data'].apply(lambda x: float(x.get('total_subscriptions_dubais', 0)))
+    
+    # Add filters in columns
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Partner type filter
+        partner_types = ['All'] + sorted(df['record_type'].unique().tolist())
+        selected_type = st.selectbox(
+            "Filter by Partner Type", 
+            partner_types,
+            key="partner_type"
+        )
+    
+    with col2:
+        # Zone filter
+        zones = ['All'] + sorted(df['zone'].unique().tolist())
+        selected_zone = st.selectbox(
+            "Filter by Zone", 
+            zones,
+            key="partner_zone"
+        )
+    
+    with col3:
+        # Analysis type selection
+        analysis_type = st.selectbox(
+            "Analysis Type",
+            ["Quantity", "Amount"],
+            key="partner_analysis_type"
+        )
+    
+    # Add search filter with expanded functionality
+    search_term = st.text_input("Search (Name, Title, Zone, Email, Church, Group)", key="partner_analytics_search")
+    
+    # Apply filters
+    filtered_df = df.copy()
+    if selected_type != 'All':
+        filtered_df = filtered_df[filtered_df['record_type'] == selected_type]
+    if selected_zone != 'All':
+        filtered_df = filtered_df[filtered_df['zone'] == selected_zone]
+    if search_term:
+        # Search across multiple fields
+        filtered_df = filtered_df[
+            filtered_df['first_name'].str.contains(search_term, case=False, na=False) |
+            filtered_df['surname'].str.contains(search_term, case=False, na=False) |
+            filtered_df['title'].str.contains(search_term, case=False, na=False) |
+            filtered_df['zone'].str.contains(search_term, case=False, na=False) |
+            filtered_df['record_data'].apply(lambda x: 
+                str(x.get('email', '')).lower().contains(search_term.lower()) or
+                str(x.get('church', '')).lower().contains(search_term.lower()) or
+                str(x.get('group', '')).lower().contains(search_term.lower())
+            )
+        ]
+    
+    # Prepare display columns based on analysis type
+    if analysis_type == "Quantity":
+        display_columns = [
+            'record_type', 'title', 'first_name', 'surname', 'zone',
+            'wonder_challenge', 'rhapsody_languages', 'kiddies_products',
+            'teevo', 'braille_nolb', 'youth_aglow', 'local_distribution',
+            'subscriptions_dubais', 'submission_date'
+        ]
+    else:  # Amount
+        filtered_df['Display Amount'] = filtered_df.apply(
+            lambda row: f"{row['original_amount']:,.2f} {row['currency']} "
+                       f"({row['grand_total']:,.2f} {display_currency})",
+            axis=1
+        )
+        display_columns = [
+            'record_type', 'title', 'first_name', 'surname', 'zone',
+            'Display Amount', 'submission_date'
+        ]
+    
+    # Display filtered results
+    st.subheader("Filtered Results")
+    st.dataframe(filtered_df[display_columns], use_container_width=True)
+
+def view_partner_reports(is_admin=False, user_zone=None):
+    """View partner records reports with edit/delete for admin"""
+    st.subheader("Partner Reports")
+    
+    # Display records in dataframe
+    filtered_df = get_filtered_partner_records(user_zone)
+    if filtered_df.empty:
+        st.warning("No partner records found.")
+        return
+        
+    st.dataframe(filtered_df, use_container_width=True)
+    
+    # Add edit/delete section for admin
+    if is_admin:
+        st.subheader("Edit/Delete Records")
+        
+        # Initialize session state for edit/delete confirmations
+        if 'partner_edit_mode' not in st.session_state:
+            st.session_state.partner_edit_mode = {}
+        if 'partner_delete_confirmations' not in st.session_state:
+            st.session_state.partner_delete_confirmations = {}
+        
+        # Search by name or ID
+        search_term = st.text_input("Search by Name or ID", key="partner_report_search")
+        if search_term:
+            search_df = filtered_df[
+                filtered_df['first_name'].str.contains(search_term, case=False, na=False) |
+                filtered_df['surname'].str.contains(search_term, case=False, na=False) |
+                filtered_df['id'].astype(str).str.contains(search_term)
+            ]
+            
+            if not search_df.empty:
+                st.write("Search Results:")
+                for idx, row in search_df.iterrows():
+                    record_id = str(row['id'])
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    with col1:
+                        st.write(f"{row['title']} {row['first_name']} {row['surname']} ({row['record_type']}) - ID: {record_id}")
+                    
+                    with col2:
+                        # Edit button
+                        if record_id not in st.session_state.partner_edit_mode:
+                            st.session_state.partner_edit_mode[record_id] = False
+                            
+                        if not st.session_state.partner_edit_mode[record_id]:
+                            if st.button("Edit", key=f"edit_partner_{record_id}"):
+                                st.session_state.partner_edit_mode[record_id] = True
+                                st.rerun()
+                    
+                    with col3:
+                        # Delete button
+                        if record_id not in st.session_state.partner_delete_confirmations:
+                            st.session_state.partner_delete_confirmations[record_id] = False
+                            
+                        if not st.session_state.partner_delete_confirmations[record_id]:
+                            if st.button("Delete", key=f"del_partner_{record_id}"):
+                                st.session_state.partner_delete_confirmations[record_id] = True
+                                st.rerun()
+                        else:
+                            col4, col5 = st.columns(2)
+                            with col4:
+                                if st.button("✓", key=f"confirm_partner_{record_id}", type="primary"):
+                                    success, message = delete_partner_record(record_id, row['record_type'])
+                                    if success:
+                                        st.success(message)
+                                        st.session_state.partner_delete_confirmations[record_id] = False
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    else:
+                                        st.error(message)
+                            with col5:
+                                if st.button("✗", key=f"cancel_partner_{record_id}"):
+                                    st.session_state.partner_delete_confirmations[record_id] = False
+                                    st.rerun()
+                    
+                    # Edit form
+                    if st.session_state.partner_edit_mode.get(record_id, False):
+                        with st.form(key=f"edit_partner_form_{record_id}"):
+                            st.write("### Edit Partner Record")
+                            
+                            # Fetch current record data
+                            current_data = get_partner_record(record_id, row['record_type'])
+                            if current_data:
+                                # Basic Info
+                                title = st.selectbox("Title", TITLE_OPTIONS, 
+                                    index=TITLE_OPTIONS.index(current_data.get('title', 'Bro')))
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    first_name = st.text_input("First Name", 
+                                        value=current_data.get('first_name', ''))
+                                with col2:
+                                    surname = st.text_input("Surname", 
+                                        value=current_data.get('surname', ''))
+                                
+                                # Contact Info
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    kingschat_phone = st.text_input("KingsChat Phone", 
+                                        value=current_data.get('kingschat_phone', ''))
+                                with col2:
+                                    email = st.text_input("Email", 
+                                        value=current_data.get('email', ''))
+                                
+                                # Church Info
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    church = st.text_input("Church", 
+                                        value=current_data.get('church', ''))
+                                with col2:
+                                    group_name = st.text_input("Group", 
+                                        value=current_data.get('group_name', ''))
+                                
+                                # Financial Info
+                                currency = st.selectbox("Currency", CURRENCIES,
+                                    index=CURRENCIES.index(current_data.get('currency', 'ESPEES')))
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    wonder_challenge = st.number_input("Wonder Challenge", 
+                                        value=float(current_data.get('total_wonder_challenge', 0)))
+                                    kiddies_products = st.number_input("Kiddies Products", 
+                                        value=float(current_data.get('total_kiddies_products', 0)))
+                                    braille_nolb = st.number_input("Braille(NOLB)", 
+                                        value=float(current_data.get('total_braille_nolb', 0)))
+                                    local_distribution = st.number_input("Local Distribution", 
+                                        value=float(current_data.get('total_local_distribution', 0)))
+                                with col2:
+                                    rhapsody_languages = st.number_input("Rhapsody Languages", 
+                                        value=float(current_data.get('total_rhapsody_languages', 0)))
+                                    teevo = st.number_input("Teevo", 
+                                        value=float(current_data.get('total_teevo', 0)))
+                                    youth_aglow = st.number_input("Youth Aglow", 
+                                        value=float(current_data.get('total_youth_aglow', 0)))
+                                    subscriptions_dubais = st.number_input("Subscriptions/Dubais", 
+                                        value=float(current_data.get('total_subscriptions_dubais', 0)))
+                                
+                                # Submit buttons
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    submit = st.form_submit_button("Update Record")
+                                with col2:
+                                    cancel = st.form_submit_button("Cancel")
+                                
+                                if submit:
+                                    # Prepare updated data
+                                    updated_data = {
+                                        'title': title,
+                                        'first_name': first_name,
+                                        'surname': surname,
+                                        'kingschat_phone': kingschat_phone,
+                                        'email': email,
+                                        'church': church,
+                                        'group_name': group_name,
+                                        'currency': currency,
+                                        'total_wonder_challenge': wonder_challenge,
+                                        'total_rhapsody_languages': rhapsody_languages,
+                                        'total_kiddies_products': kiddies_products,
+                                        'total_teevo': teevo,
+                                        'total_braille_nolb': braille_nolb,
+                                        'total_youth_aglow': youth_aglow,
+                                        'total_local_distribution': local_distribution,
+                                        'total_subscriptions_dubais': subscriptions_dubais
+                                    }
+                                    
+                                    success, message = update_partner_record(record_id, row['record_type'], updated_data)
+                                    if success:
+                                        st.success(message)
+                                        st.session_state.partner_edit_mode[record_id] = False
+                                        time.sleep(0.5)
+                                        st.rerun()
+                                    else:
+                                        st.error(message)
+                                
+                                if cancel:
+                                    st.session_state.partner_edit_mode[record_id] = False
+                                    st.rerun()
+            else:
+                st.info("No records found matching your search.")
+
+# Also add these helper functions for partner record operations
+def get_partner_record(record_id, record_type):
+    """Fetch a specific partner record"""
+    try:
+        conn = sqlite3.connect('partner_records.db')
+        c = conn.cursor()
+        
+        table_map = {
+            'Adult Partner': 'adult_partners',
+            'Child Partner': 'children_partners',
+            'Teenager Partner': 'teenager_partners',
+            'External Partner': 'external_partners'
+        }
+        
+        table_name = table_map.get(record_type)
+        if not table_name:
+            return None
+            
+        c.execute(f"""SELECT record_data 
+                    FROM {table_name} 
+                    WHERE id = ?""", 
+                 (record_id,))
+        record = c.fetchone()
+        conn.close()
+        
+        if record:
+            return json.loads(record[0])
+        return None
+    except Exception as e:
+        st.error(f"Error fetching partner record: {e}")
+        return None
+
+def update_partner_record(record_id, record_type, updated_data):
+    """Update an existing partner record"""
+    try:
+        conn = sqlite3.connect('partner_records.db')
+        c = conn.cursor()
+        
+        table_map = {
+            'Adult Partner': 'adult_partners',
+            'Child Partner': 'children_partners',
+            'Teenager Partner': 'teenager_partners',
+            'External Partner': 'external_partners'
+        }
+        
+        table_name = table_map.get(record_type)
+        if not table_name:
+            return False, "Invalid record type"
+        
+        # Calculate totals and convert currency
+        original_amount = sum([
+            float(updated_data.get('total_wonder_challenge', 0)),
+            float(updated_data.get('total_rhapsody_languages', 0)),
+            float(updated_data.get('total_kiddies_products', 0)),
+            float(updated_data.get('total_teevo', 0)),
+            float(updated_data.get('total_braille_nolb', 0)),
+            float(updated_data.get('total_youth_aglow', 0)),
+            float(updated_data.get('total_local_distribution', 0)),
+            float(updated_data.get('total_subscriptions_dubais', 0))
+        ])
+        
+        grand_total = convert_to_espees(original_amount, updated_data['currency'])
+        
+        # Add calculated totals to updated data
+        updated_data.update({
+            'original_amount': original_amount,
+            'grand_total': grand_total
+        })
+        
+        # Convert data to JSON string
+        record_json = json.dumps(updated_data)
+        
+        # Update the record
+        c.execute(f"""UPDATE {table_name} 
+                    SET record_data = ?, 
+                        submission_date = CURRENT_TIMESTAMP
+                    WHERE id = ?""",
+                 (record_json, record_id))
+        
+        conn.commit()
+        conn.close()
+        return True, "Record updated successfully!"
+    except Exception as e:
+        return False, f"Error updating record: {e}"
 
 if __name__ == "__main__":
     try:
         init_db()
+        init_partner_db()
+        load_conversion_rates()  # Add this line to load saved rates
         main()
     except Exception as e:
         st.error(f"A critical error occurred: {e}")
+

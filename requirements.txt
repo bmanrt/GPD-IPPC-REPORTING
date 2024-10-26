@@ -2,3 +2,5 @@ streamlit
 pandas
 datetime
 openpyxl
+plotly
+
