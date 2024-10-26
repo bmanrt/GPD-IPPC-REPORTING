@@ -551,50 +551,77 @@ def record_templates_ui():
 # Add these functions after the validate_sheet_data function
 
 def save_partner_records(df, selected_zone, currency):
-    """Save partner records to database"""
+    """Save partner records to database with proper amount handling"""
     try:
         from partner_records import add_partner_record, add_external_partner_record
         
         for _, row in df.iterrows():
-            partner_data = row.to_dict()
-            partner_data['zone'] = selected_zone
-            partner_data['currency'] = currency
+            # Helper function to safely convert numeric values
+            def safe_float(value, default=0.0):
+                try:
+                    if pd.isna(value):
+                        return default
+                    return float(value)
+                except (ValueError, TypeError):
+                    return default
+
+            partner_data = {}
             
-            # Ensure total amount is included
-            if 'Total Amount' not in partner_data:
-                if row['Category'] != 'External Partner':
-                    partner_data['total_amount'] = sum([
-                        float(partner_data.get('Total Amount Given for Wonder Challenge', 0)),
-                        float(partner_data.get('Total Amount Given for Rhapsody Languages', 0)),
-                        float(partner_data.get('Total Amount Given for Kiddies Products', 0)),
-                        float(partner_data.get('Total Amount Given for Teevo', 0)),
-                        float(partner_data.get('Total Amount Given for Braille(NOLB)', 0)),
-                        float(partner_data.get('Total Amount Given for Youth Aglow', 0)),
-                        float(partner_data.get('Total Given for Local Distribution', 0)),
-                        float(partner_data.get('Total Given for Subscriptions/Dubais', 0))
-                    ])
-                else:
-                    partner_data['total_amount'] = sum([
-                        float(partner_data.get('Rhapsody Subscriptions and Dubais', 0)),
-                        float(partner_data.get('Sponsorship Through Retail Center', 0)),
-                        float(partner_data.get('Translators Network International', 0)),
-                        float(partner_data.get('Rhapsody Influencers Network', 0)),
-                        float(partner_data.get('RIM', 0))
-                    ])
-            
+            # Basic info
+            partner_data.update({
+                'title': str(row.get('Title', '')),
+                'first_name': str(row.get('First Name', '')),
+                'surname': str(row.get('Surname', '')),
+                'kingschat_phone': str(row.get('KingsChat Phone Number', '')),
+                'email': str(row.get('Email Address', '')),
+                'zone': selected_zone,
+                'currency': currency
+            })
+
+            # Category specific fields
             if row['Category'] == 'External Partner':
+                partner_data.update({
+                    'rhapsody_subscriptions_dubais': safe_float(row.get('Rhapsody Subscriptions and Dubais')),
+                    'sponsorship_retail_center': safe_float(row.get('Sponsorship Through Retail Center')),
+                    'translators_network_international': safe_float(row.get('Translators Network International')),
+                    'rhapsody_influencers_network': safe_float(row.get('Rhapsody Influencers Network')),
+                    'rim': safe_float(row.get('RIM')),
+                    'total_amount': safe_float(row.get('Total Amount'))
+                })
                 success, message = add_external_partner_record(partner_data)
             else:
+                # Regular partner fields
+                partner_data.update({
+                    'church': str(row.get('Church', '')),
+                    'group': str(row.get('Group', '')),
+                    'total_wonder_challenge': safe_float(row.get('Total Amount Given for Wonder Challenge')),
+                    'total_rhapsody_languages': safe_float(row.get('Total Amount Given for Rhapsody Languages')),
+                    'total_kiddies_products': safe_float(row.get('Total Amount Given for Kiddies Products')),
+                    'total_teevo': safe_float(row.get('Total Amount Given for Teevo')),
+                    'total_braille_nolb': safe_float(row.get('Total Amount Given for Braille(NOLB)')),
+                    'total_youth_aglow': safe_float(row.get('Total Amount Given for Youth Aglow')),
+                    'total_local_distribution': safe_float(row.get('Total Given for Local Distribution')),
+                    'total_subscriptions_dubais': safe_float(row.get('Total Given for Subscriptions/Dubais')),
+                    'total_amount': safe_float(row.get('Total Amount'))
+                })
+
+                # Add category specific fields
+                if row['Category'] == 'Child Partner':
+                    partner_data['age'] = safe_float(row.get('Age', 0))
+                    partner_data['birthday'] = row.get('Birthdays')
+                elif row['Category'] == 'Teenager Partner':
+                    partner_data['birthdays'] = row.get('Birthdays')
+
                 success, message = add_partner_record(
                     partner_data,
                     is_child=(row['Category'] == 'Child Partner'),
                     is_teenager=(row['Category'] == 'Teenager Partner')
                 )
-            
+
             if not success:
                 st.error(message)
                 return False
-        
+
         return True
     except Exception as e:
         st.error(f"Error saving partner records: {e}")
