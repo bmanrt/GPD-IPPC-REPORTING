@@ -195,8 +195,14 @@ def login_user(username, password):
         st.session_state.is_super_admin = False
         st.session_state.is_regional_manager = user[5] == "Regional Manager"
         st.session_state.region = user[6]
-        st.session_state.user_group = user[4]  # Assuming user_group is at index 4
-        st.session_state.sub_group = user[5]   # Assuming sub_group is at index 5
+        st.session_state.user_group = user[4]
+        st.session_state.sub_group = user[5]
+        
+        # Add full access flag for reporting/admin users
+        st.session_state.has_full_access = (
+            user[4] == "GPD" and 
+            user[5] == "Reporting/Admin"
+        )
         return True
     return False
 
@@ -453,54 +459,154 @@ def display_login_register():
                 st.error("Username already exists")
 
 def display_dashboard():
-    if st.session_state.is_super_admin:
-        display_admin_dashboard()
-    elif st.session_state.is_regional_manager or (
+    if st.session_state.is_super_admin or (
+        st.session_state.user_group == "GPD" and 
+        st.session_state.sub_group == "IT"
+    ):
+        # Full admin access for super admin and IT
+        display_admin_dashboard(is_full_admin=True)
+    elif (
         st.session_state.user_group == "GPD" and 
         st.session_state.sub_group == "Reporting/Admin"
     ):
-        display_full_access_dashboard()
+        # Limited admin access for reporting/admin
+        display_admin_dashboard(is_full_admin=False)
+    elif st.session_state.is_regional_manager or (
+        st.session_state.user_group == "GPD" and 
+        st.session_state.sub_group in ["Regional Manager", "Admin Manager"]
+    ):
+        # Regional manager view for RM and Admin Manager
+        display_regional_dashboard(
+            is_admin_manager=(
+                st.session_state.user_group == "GPD" and 
+                st.session_state.sub_group == "Admin Manager"
+            )
+        )
     else:
         display_user_dashboard()
 
-def display_admin_dashboard():
+def display_admin_dashboard(is_full_admin=False):
     st.title("Admin Dashboard")
     
-    # Create tabs for different admin functions
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "User Management", 
-        "Record Templates", 
-        "View Reports",
-        "Partner Analytics",
-        "Church Analytics",
-        "ROR Analytics",
-        "Debug Database",
-        "Purge Database"  # New tab
-    ])
+    if is_full_admin:
+        # Full admin tabs for super admin and IT
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+            "User Management", 
+            "Record Templates", 
+            "View Reports",
+            "Partner Analytics",
+            "Church Analytics",
+            "ROR Analytics",
+            "Debug Database",
+            "Purge Database"
+        ])
+        
+        with tab1:
+            user_management_ui()
+        
+        with tab2:
+            record_templates_ui()
+        
+        with tab3:
+            view_reports_ui()
+            
+        with tab4:
+            partner_analytics_ui()
+            
+        with tab5:
+            church_analytics_ui()
+            
+        with tab6:
+            ror_analytics_ui()
+            
+        with tab7:
+            debug_database_ui()
+            
+        with tab8:
+            purge_database_ui()
+            
+    else:
+        # Limited tabs for reporting/admin users
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+            "RZM Overview",
+            "Record Templates", 
+            "View Reports",
+            "Partner Analytics",
+            "Church Analytics",
+            "ROR Analytics"
+        ])
+        
+        with tab1:
+            display_rzm_overview()
+        
+        with tab2:
+            record_templates_ui()
+        
+        with tab3:
+            view_reports_ui()
+            
+        with tab4:
+            partner_analytics_ui()
+            
+        with tab5:
+            church_analytics_ui()
+            
+        with tab6:
+            ror_analytics_ui()
+
+def display_rzm_overview():
+    """Display overview of all RZMs and their zones"""
+    st.subheader("RZM Overview")
     
-    with tab1:
-        user_management_ui()
+    # Fetch all RZM users
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("""
+        SELECT full_name, email, region, zone 
+        FROM users 
+        WHERE user_group = 'RZM'
+        ORDER BY region, zone
+    """)
+    rzms = c.fetchall()
+    conn.close()
     
-    with tab2:
-        record_templates_ui()
+    if not rzms:
+        st.info("No RZMs registered in the system")
+        return
     
-    with tab3:
-        view_reports_ui()
+    # Group RZMs by region
+    regions = {}
+    for rzm in rzms:
+        full_name, email, region, zone = rzm
+        if region not in regions:
+            regions[region] = []
+        regions[region].append({
+            'name': full_name,
+            'email': email,
+            'zone': zone
+        })
+    
+    # Display RZMs by region
+    for region, rzm_list in regions.items():
+        st.write(f"### {region}")
         
-    with tab4:
-        partner_analytics_ui()
+        # Create a DataFrame for this region's RZMs
+        df = pd.DataFrame(rzm_list)
+        df.columns = ['Name', 'Email', 'Zone']
         
-    with tab5:
-        church_analytics_ui()
+        # Display as a styled table
+        st.dataframe(
+            df,
+            column_config={
+                "Name": st.column_config.TextColumn("Name", width="medium"),
+                "Email": st.column_config.TextColumn("Email", width="medium"),
+                "Zone": st.column_config.TextColumn("Zone", width="medium")
+            },
+            hide_index=True,
+            use_container_width=True
+        )
         
-    with tab6:
-        ror_analytics_ui()
-        
-    with tab7:
-        debug_database_ui()
-        
-    with tab8:
-        purge_database_ui()  # New tab content
+        st.write("---")  # Add separator between regions
 
 def debug_database_ui():
     st.header("Database Management")
